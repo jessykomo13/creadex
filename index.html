@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+<title>CréaDex</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+:root{
+  --disp: ui-rounded, "SF Pro Rounded", "Segoe UI", system-ui, sans-serif;
+  --body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+  --shell:#2A2D43; --shell2:#3A3E5C; --shell3:#20223A;
+  --screen:#DDE9D5; --screen2:#C8DABE; --edge:#171929;
+  --accent:#FFC13B; --danger:#FF6B6B; --ink:#2A2D43; --good:#22c55e;
+}
+html,body{ height:100%; }
+body{ font-family:var(--body); color:var(--ink);
+  background:radial-gradient(circle at 50% 0%, #3a3e5c 0%, #1a1c2e 70%);
+  min-height:100%; padding:18px 12px 40px; display:flex; justify-content:center; }
+.device{ width:100%; max-width:440px; background:var(--shell); border-radius:30px; padding:16px 16px 20px;
+  box-shadow:0 18px 40px rgba(0,0,0,.45), inset 0 2px 0 rgba(255,255,255,.06), inset 0 -6px 14px rgba(0,0,0,.4);
+  border:1px solid #454a6b; align-self:flex-start; }
+.top{ display:flex; align-items:center; gap:10px; padding:2px 4px 14px; }
+.lens{ width:40px; height:40px; border-radius:50%; flex:none;
+  background:radial-gradient(circle at 32% 30%, #bfe9ff 0%, #4aa3e0 35%, #1f5fb0 75%, #0e3a7a 100%);
+  border:3px solid #cfe8ff; animation:pulse 2.6s ease-in-out infinite; }
+@keyframes pulse{ 0%,100%{box-shadow:0 0 0 3px var(--shell3),0 0 8px 1px rgba(90,170,255,.35);} 50%{box-shadow:0 0 0 3px var(--shell3),0 0 20px 5px rgba(90,170,255,.75);} }
+.title{ line-height:1; }
+.title h1{ font-family:var(--disp); font-weight:700; font-size:19px; color:#fff; letter-spacing:.5px; }
+.title span{ font-size:9px; color:#aab; letter-spacing:2px; text-transform:uppercase; }
+.notif-btn{ margin-left:auto; background:var(--shell2); color:#fff; border:none; border-radius:20px; padding:8px 12px;
+  font-family:var(--disp); font-weight:600; font-size:13px; cursor:pointer; position:relative; }
+.notif-badge{ position:absolute; top:-8px; right:-8px; background:#FF6B6B; color:#fff; border-radius:50%; width:20px; height:20px; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; }
+.screen{ background:linear-gradient(160deg,var(--screen) 0%, var(--screen2) 100%);
+  border-radius:16px; border:6px solid var(--edge); box-shadow:inset 0 3px 10px rgba(0,0,0,.35);
+  padding:16px; min-height:330px; position:relative; overflow:auto; }
+.empty{ text-align:center; padding:40px 10px; }
+.empty .icon{ font-size:48px; } .empty h2{ font-family:var(--disp); font-size:19px; margin-top:8px; }
+.empty p{ font-size:14px; color:#5c6152; margin-top:6px; }
+.num{ font-family:var(--disp); font-weight:600; font-size:14px; color:#6b7060; letter-spacing:1px; }
+.photo{ width:100%; height:210px; border-radius:14px; object-fit:cover; border:4px solid #fff;
+  box-shadow:0 4px 12px rgba(0,0,0,.2); background:#eef3e8; margin:6px 0 12px; display:block; }
+.photo.ph{ display:flex; align-items:center; justify-content:center; font-size:56px; color:#b7c1a8; }
+.name{ font-family:var(--disp); font-weight:700; font-size:25px; line-height:1.05; }
+.chips{ display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+.chip{ font-family:var(--disp); font-weight:600; font-size:13px; padding:5px 11px; border-radius:20px; color:#fff;
+  display:inline-flex; gap:5px; align-items:center; box-shadow:0 2px 4px rgba(0,0,0,.18); }
+.chip.dk{ color:#2a2d43; }
+.note{ display:flex; align-items:center; gap:10px; margin-top:12px; background:#fff; border-radius:12px; padding:8px 12px; }
+.note .lab{ font-family:var(--disp); font-weight:700; font-size:15px; }
+.note .val{ font-family:var(--disp); font-weight:700; font-size:22px; margin-left:auto; color:#c98a00; }
+.bio{ font-size:14px; color:#464b3d; margin-top:12px; line-height:1.45; font-style:italic; }
+.sec-h{ font-family:var(--disp); font-weight:600; font-size:13px; text-transform:uppercase; letter-spacing:1.5px;
+  color:#7a8069; margin:16px 0 6px; border-bottom:2px dashed #b3bda6; padding-bottom:4px; }
+.abil{ display:flex; gap:8px; padding:6px 0; border-bottom:1px solid rgba(0,0,0,.06); flex-direction:column;}
+.abil .b{ font-size:16px; } .abil .n{ font-family:var(--disp); font-weight:600; font-size:15px; }
+.abil .d{ font-size:13px; color:#5c6152; }
+.nav{ display:flex; align-items:center; gap:10px; margin-top:14px; }
+.arrow{ flex:none; width:42px; height:42px; border-radius:12px; border:none; background:var(--shell2); color:#fff; font-size:20px; box-shadow:0 3px 0 var(--shell3); cursor:pointer; }
+.arrow:active{ transform:translateY(2px); box-shadow:0 1px 0 var(--shell3); }
+.arrow:disabled{ opacity:.4; cursor:not-allowed; }
+.count{ flex:1; text-align:center; font-family:var(--disp); font-weight:600; color:#cdd2e6; font-size:14px; }
+.strip{ display:flex; gap:8px; overflow-x:auto; padding:12px 2px 4px; }
+.thumb{ flex:none; width:54px; height:54px; border-radius:12px; overflow:hidden; border:3px solid transparent; background:#4a4f72; cursor:pointer; }
+.thumb.sel{ border-color:var(--accent); }
+.thumb img{ width:100%; height:100%; object-fit:cover; }
+.thumb .ph{ display:flex; width:100%; height:100%; align-items:center; justify-content:center; font-size:22px; }
+.btn{ font-family:var(--disp); font-weight:600; border:none; border-radius:14px; cursor:pointer; }
+.btn:active{ transform:translateY(2px); }
+.add{ width:100%; margin-top:12px; padding:15px; font-size:17px; color:#2a2d43; background:linear-gradient(180deg,#FFD062,#FFC13B); box-shadow:0 4px 0 #cf9a1f; }
+.add:active{ box-shadow:0 2px 0 #cf9a1f; }
+.actrow{ display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px; }
+.actbtn{ padding:12px; font-size:14px; color:#fff; background:var(--shell2); box-shadow:0 3px 0 var(--shell3); border-radius:12px; font-family:var(--disp); font-weight:600; border:none; cursor:pointer; }
+.actbtn:active{ transform:translateY(2px); box-shadow:0 1px 0 var(--shell3); }
+.del{ margin-top:8px; width:100%; padding:11px; font-size:14px; color:#fff; background:var(--danger); box-shadow:0 3px 0 #c94a4a; cursor:pointer; }
+label{ display:block; font-family:var(--disp); font-weight:600; font-size:13px; text-transform:uppercase; letter-spacing:1px; color:#7a8069; margin:14px 0 5px; }
+.input, .area{ width:100%; border:2px solid #b3bda6; border-radius:10px; padding:10px 12px; font-family:var(--body); font-size:16px; background:#f4f8ef; color:var(--ink); font-weight:600; }
+.area{ resize:vertical; min-height:56px; } .input:focus, .area:focus{ outline:none; border-color:var(--accent); }
+.photobox{ width:100%; height:140px; border:3px dashed #a9b499; border-radius:14px; background:#eef3e8; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; color:#7a8069; overflow:hidden; cursor:pointer; }
+.photobox img{ width:100%; height:100%; object-fit:cover; } .photobox .pi{ font-size:32px; } .photobox .pt{ font-size:13px; font-weight:700; }
+.typegrid{ display:flex; flex-wrap:wrap; gap:7px; }
+.typebtn{ font-family:var(--disp); font-weight:600; font-size:13px; padding:7px 12px; border-radius:20px; border:2px solid transparent; display:inline-flex; gap:5px; align-items:center; opacity:.5; color:#fff; cursor:pointer; }
+.typebtn.dk{ color:#2a2d43; } .typebtn.on{ opacity:1; box-shadow:0 3px 7px rgba(0,0,0,.22); transform:translateY(-1px); }
+.abilrow{ display:flex; gap:6px; margin-bottom:8px; } .abilrow .input{ flex:1; }
+.mini{ flex:none; width:44px; border-radius:10px; border:none; font-size:22px; font-family:var(--disp); color:#fff; background:var(--shell2); cursor:pointer; }
+.abilitem{ display:flex; align-items:center; gap:8px; background:#eef3e8; border-radius:10px; padding:8px 10px; margin-bottom:6px; }
+.abilitem .txt{ flex:1; font-size:14px; font-weight:700; } .abilitem .txt small{ display:block; font-weight:600; color:#6b7060; }
+.xbtn{ border:none; background:var(--danger); color:#fff; width:26px; height:26px; border-radius:8px; font-weight:700; flex:none; cursor:pointer; }
+.formbtns{ display:flex; gap:10px; margin-top:18px; }
+.save{ flex:1; padding:14px; font-size:16px; color:#2a2d43; background:linear-gradient(180deg,#FFD062,#FFC13B); box-shadow:0 4px 0 #cf9a1f; }
+.cancel{ flex:none; padding:14px 18px; font-size:15px; color:#fff; background:var(--shell2); box-shadow:0 4px 0 var(--shell3); }
+.err{ color:var(--danger); font-size:13px; font-weight:700; margin-top:8px; text-align:center; }
+.h2{ font-family:var(--disp); font-weight:700; font-size:20px; margin-bottom:4px; }
+.sub{ font-size:13px; color:#5c6152; margin-bottom:10px; }
+.pick{ display:flex; align-items:center; gap:10px; background:#fff; border-radius:12px; padding:8px; margin-bottom:8px; border:2px solid transparent; cursor:pointer; }
+.pick.on{ border-color:var(--accent); }
+.pick img{ width:46px; height:46px; border-radius:9px; object-fit:cover; flex:none; background:#eef3e8; }
+.pick .ph2{ width:46px; height:46px; border-radius:9px; display:flex; align-items:center; justify-content:center; background:#eef3e8; font-size:22px; flex:none; }
+.pick .info{ flex:1; min-width:0; } .pick .info b{ font-family:var(--disp); font-size:15px; }
+.pick .info small{ display:block; color:#6b7060; }
+.pick .badge{ font-family:var(--disp); font-weight:700; color:#c98a00; }
+.groupt{ font-family:var(--disp); font-weight:700; font-size:13px; color:#7a8069; margin:10px 0 6px; text-transform:uppercase; letter-spacing:1px; }
+.result{ text-align:center; padding:10px 0; }
+.result .big{ font-family:var(--disp); font-weight:700; font-size:26px; margin:8px 0; }
+.vs{ display:flex; align-items:center; gap:8px; justify-content:center; margin:10px 0; }
+.vs .card2{ background:#fff; border-radius:12px; padding:8px; width:120px; }
+.vs .card2 img{ width:100%; height:80px; object-fit:cover; border-radius:8px; }
+.vs .card2 .ph3{ width:100%; height:80px; display:flex; align-items:center; justify-content:center; font-size:34px; background:#eef3e8; border-radius:8px; }
+.vs .n2{ font-family:var(--disp); font-weight:700; font-size:14px; margin-top:4px; }
+.vs .sc{ font-family:var(--disp); font-weight:700; color:#c98a00; }
+.vs .mid{ font-family:var(--disp); font-weight:700; font-size:20px; color:#7a8069; }
+.code{ width:100%; height:110px; border:2px solid #b3bda6; border-radius:10px; padding:10px; font-family:monospace; font-size:12px; background:#f4f8ef; color:#333; word-break:break-all; }
+.msg{ background:#eaf7ee; border:2px solid #bfe6c8; color:#256b38; border-radius:12px; padding:10px 12px; font-size:14px; font-weight:600; margin-bottom:10px; }
+.warn{ background:#fff6e0; border:2px solid #ffe1a3; color:#8a6100; border-radius:12px; padding:10px 12px; font-size:13px; font-weight:600; margin-bottom:10px; }
+.full{ width:100%; padding:13px; font-size:15px; margin-top:8px; color:#fff; background:var(--good); box-shadow:0 3px 0 #16944a; border-radius:12px; font-family:var(--disp); font-weight:600; border:none; cursor:pointer; }
+.back{ width:100%; padding:12px; font-size:14px; margin-top:8px; color:#fff; background:var(--shell2); box-shadow:0 3px 0 var(--shell3); border-radius:12px; font-family:var(--disp); font-weight:600; border:none; cursor:pointer; }
+.plist{ display:flex; align-items:center; gap:8px; background:#fff; border-radius:12px; padding:10px; margin-bottom:8px; }
+.plist b{ flex:1; font-family:var(--disp); font-size:15px; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.plist .tag{ font-size:11px; color:#22a05a; font-weight:700; }
+.plist-action{ display:flex; gap:6px; margin-left:auto; }
+.plist-action button{ padding:8px 10px; font-size:13px; border:none; border-radius:9px; font-weight:700; cursor:pointer; color:#fff; background:var(--shell2); }
+.notif-item{ background:#fff; border-radius:12px; padding:12px; margin-bottom:8px; border-left:4px solid var(--accent); }
+.notif-type{ font-family:var(--disp); font-weight:700; font-size:12px; color:#7a8069; text-transform:uppercase; }
+.notif-from{ font-family:var(--disp); font-weight:700; font-size:15px; margin:4px 0; }
+.notif-body{ font-size:13px; color:#5c6152; margin-bottom:4px; }
+.notif-action{ display:flex; gap:6px; margin-top:8px; }
+.notif-action button{ flex:1; padding:8px; font-size:13px; border:none; border-radius:8px; font-weight:700; cursor:pointer; }
+.notif-accept{ background:var(--good); color:#fff; }
+.notif-refuse{ background:#ddd; color:#333; }
+.notif-x{ border:none; background:#ddd; color:#333; border-radius:8px; padding:6px 12px; font-weight:700; cursor:pointer; font-size:13px; }
+.login-form{ display:flex; flex-direction:column; gap:8px; padding:20px 10px; }
+.login-form .logo{ text-align:center; margin-bottom:14px; }
+.login-form .logo-icon{ font-size:48px; margin-bottom:8px; }
+.login-form .logo-title{ font-family:var(--disp); font-size:24px; font-weight:700; margin-bottom:4px; }
+.login-form .logo-sub{ font-size:13px; color:#5c6152; }
+</style>
+</head>
+<body>
+<div class="device">
+  <div class="top">
+    <div class="lens"></div>
+    <div class="title"><h1>CréaDex</h1><span>Encyclopédie · v6</span></div>
+    <button class="notif-btn" id="notifBtn" onclick="openNotif()">
+      🔔
+      <span class="notif-badge" id="notifBadge" style="display:none">0</span>
+    </button>
+  </div>
+  <div class="screen" id="screen">
+    <div class="empty"><div class="icon">🔍</div><h2>Chargement…</h2></div>
+  </div>
+  <div id="controls"></div>
+</div>
+<input type="file" id="fileInput" accept="image/*" style="display:none" />
+
+<script>
+/* ===================== TYPES ===================== */
+const TYPES=[
+ {id:"feu",label:"Feu",emoji:"🔥",color:"#FF6B35",dark:false},{id:"eau",label:"Eau",emoji:"💧",color:"#3D9BE9",dark:false},
+ {id:"terre",label:"Terre",emoji:"🌍",color:"#B07D4A",dark:false},{id:"air",label:"Air",emoji:"💨",color:"#8FD0E0",dark:true},
+ {id:"plante",label:"Plante",emoji:"🌿",color:"#57B85A",dark:false},{id:"foudre",label:"Foudre",emoji:"⚡",color:"#F5C518",dark:true},
+ {id:"glace",label:"Glace",emoji:"❄️",color:"#77CFDD",dark:true},{id:"roche",label:"Roche",emoji:"🪨",color:"#9B8B6E",dark:false},
+ {id:"poison",label:"Poison",emoji:"☠️",color:"#9B59B6",dark:false},{id:"psy",label:"Psy",emoji:"🔮",color:"#E86FA0",dark:false},
+ {id:"tenebres",label:"Ténèbres",emoji:"🌑",color:"#4A4A5E",dark:false},{id:"lumiere",label:"Lumière",emoji:"✨",color:"#FFD86B",dark:true}
+];
+const typeById=id=>TYPES.find(t=>t.id===id);
+const PLACEHOLDER="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22%3E%3Crect fill=%22%23eef3e8%22 width=%22100%22 height=%22100%22/%3E%3C/svg%3E";
+
+/* ===================== STORAGE WRAPPER =====================
+   Utilise window.storage (stockage d'artefact) si dispo.
+   - shared=false : données perso (juste toi)
+   - shared=true  : données partagées entre TOUS les joueurs de l'app
+   Sinon, repli sur localStorage (mono-appareil, les demandes ne partiront pas). */
+const HAS_WS = (typeof window!=="undefined" && window.storage && typeof window.storage.get==="function");
+const store={
+  async get(key,shared=false){
+    if(HAS_WS){ try{ const r=await window.storage.get(key,shared); return r?r.value:null; }catch(e){ return null; } }
+    try{ return localStorage.getItem((shared?"S:":"P:")+key); }catch(e){ return null; }
+  },
+  async set(key,value,shared=false){
+    if(HAS_WS){ try{ await window.storage.set(key,value,shared); }catch(e){} return; }
+    try{ localStorage.setItem((shared?"S:":"P:")+key,value); }catch(e){}
+  },
+  async del(key,shared=false){
+    if(HAS_WS){ try{ await window.storage.delete(key,shared); }catch(e){} return; }
+    try{ localStorage.removeItem((shared?"S:":"P:")+key); }catch(e){}
+  },
+  async list(prefix,shared=false){
+    if(HAS_WS){ try{ const r=await window.storage.list(prefix,shared); if(!r||!r.keys) return []; return r.keys.map(k=>typeof k==="string"?k:(k.key||k.name)); }catch(e){ return []; } }
+    const out=[]; const pf=(shared?"S:":"P:")+prefix;
+    try{ for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); if(k&&k.indexOf(pf)===0) out.push(k.slice((shared?"S:":"P:").length)); } }catch(e){}
+    return out;
+  }
+};
+
+/* ===================== STATE ===================== */
+let state={creatures:[], friends:[], notifications:[]};
+let currentUsername=null, currentUserId=null;
+let mode="view", currentId=null, form=null;
+let bResult=null, shareCode="", flash="";
+let pendingTarget=null;   // {id,name} quand j'initie un défi/échange
+let pendingNotif=null;    // la notif à laquelle je réponds
+const processedMsgKeys=new Set();
+const PROTECTED=new Set(["form","import","share"]); // écrans à ne pas ré-afficher pendant la saisie
+
+const fileInput=document.getElementById("fileInput");
+function esc(s){return (s||"").replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,6);}
+function myCreatures(){return state.creatures;}
+function noteOf(c){return typeof c.note==="number"?c.note:50;}
+function findCard(id){return state.creatures.find(c=>c.id===id);}
+
+/* ===================== PERSISTENCE ===================== */
+async function loadMe(){
+  const raw=await store.get("me",false);
+  if(!raw) return false;
+  try{
+    const u=JSON.parse(raw);
+    currentUsername=u.username; currentUserId=u.userId;
+    state=u.state||{creatures:[],friends:[],notifications:[]};
+    if(!state.creatures)state.creatures=[];
+    if(!state.friends)state.friends=[];
+    if(!state.notifications)state.notifications=[];
+    return true;
+  }catch(e){ return false; }
+}
+function saveLocal(){
+  if(!currentUserId) return;
+  store.set("me", JSON.stringify({username:currentUsername,userId:currentUserId,state}), false);
+}
+function publishProfile(){
+  if(!currentUserId) return;
+  store.set("user:"+currentUserId, JSON.stringify({userId:currentUserId,username:currentUsername}), true);
+}
+
+/* Envoyer un message dans la boîte partagée d'un autre joueur */
+function sendMsg(toUserId, msg){
+  msg.id=msg.id||uid();
+  return store.set("msg:"+toUserId+":"+msg.id, JSON.stringify(msg), true);
+}
+
+function register(username){
+  if(!username||!username.trim()) return;
+  currentUsername=username.trim();
+  currentUserId=uid();
+  state={creatures:[],friends:[],notifications:[]};
+  saveLocal(); publishProfile();
+  mode="view"; render();
+}
+function handleLogout(){
+  currentUsername=null; currentUserId=null;
+  state={creatures:[],friends:[],notifications:[]};
+  store.del("me",false);
+  mode="login"; render();
+}
+
+/* ===================== IMAGE ===================== */
+function resizeImage(file,maxDim){maxDim=maxDim||560;return new Promise((resolve,reject)=>{const r=new FileReader();
+ r.onload=e=>{const img=new Image();img.onload=()=>{let w=img.width,h=img.height;
+  if(w>h&&w>maxDim){h=h*maxDim/w;w=maxDim;}else if(h>maxDim){w=w*maxDim/h;h=maxDim;}
+  const c=document.createElement("canvas");c.width=w;c.height=h;c.getContext("2d").drawImage(img,0,0,w,h);
+  resolve(c.toDataURL("image/jpeg",0.8));};img.onerror=reject;img.src=e.target.result;};
+ r.onerror=reject;r.readAsDataURL(file);});}
+
+/* ===================== CODES (partage hors-ligne, marche partout) ===================== */
+function encodeCard(c){const o={name:c.name,types:c.types,bio:c.bio,image:c.image,abilities:c.abilities,note:noteOf(c)};
+  return "CREADEX1:"+btoa(unescape(encodeURIComponent(JSON.stringify(o))));}
+function decodeCard(s){s=(s||"").trim();const i=s.indexOf("CREADEX1:");if(i>=0)s=s.slice(i+9);
+  const json=decodeURIComponent(escape(atob(s)));return JSON.parse(json);}
+
+/* ===================== FORMULAIRE CRÉATURE ===================== */
+function openForm(){form={name:"",types:[],bio:"",image:null,abilities:[],note:50};mode="form";render();}
+function toggleType(id){if(form.types.includes(id))form.types=form.types.filter(x=>x!==id);else if(form.types.length<3)form.types.push(id);render();}
+function pickImage(){fileInput.click();}
+fileInput.addEventListener("change",async e=>{const f=e.target.files[0];if(!f||!form)return;
+  try{form.image=await resizeImage(f);render();}catch(err){alert("Erreur image");}});
+function addAbility(){const n=document.getElementById("abName"),d=document.getElementById("abDesc");
+  if(!n.value.trim())return;form.abilities.push({name:n.value.trim(),desc:d?d.value.trim():""});render();}
+function removeAbility(i){form.abilities.splice(i,1);render();}
+function saveCreature(){
+  const name=document.getElementById("fName").value.trim();
+  const bio=document.getElementById("fBio").value.trim();
+  let note=parseInt(document.getElementById("fNote").value,10)||50;
+  if(!name)return;
+  const c={id:uid(),name,types:form.types.slice(),bio,image:form.image,abilities:form.abilities.slice(),note:Math.max(0,Math.min(100,note))};
+  state.creatures.push(c);currentId=c.id;mode="view";form=null;saveLocal();render();}
+function deleteCurrent(){if(!currentId)return;
+  if(!confirm("Supprimer cette créature ?"))return;
+  state.creatures=state.creatures.filter(c=>c.id!==currentId);
+  currentId=state.creatures.length?state.creatures[0].id:null;saveLocal();render();}
+function go(dir){const i=state.creatures.findIndex(c=>c.id===currentId)+dir;if(i>=0&&i<state.creatures.length){currentId=state.creatures[i].id;render();}}
+function select(id){currentId=id;render();}
+
+/* ===================== PARTAGE PAR CODE ===================== */
+function openShare(){shareCode="";mode="share";render();}
+function shareCard(id,give){const c=findCard(id);if(!c)return;shareCode=encodeCard(c);
+  if(give){state.creatures=state.creatures.filter(x=>x.id!==id);currentId=state.creatures.length?state.creatures[0].id:null;saveLocal();}
+  render();}
+function copyCode(){const ta=document.getElementById("codeBox");if(ta){ta.select();try{navigator.clipboard.writeText(ta.value);}catch(e){document.execCommand("copy");}}}
+function openImport(){mode="import";render();}
+function doImport(){const el=document.getElementById("impBox");try{
+  const card=decodeCard(el.value);
+  const c={id:uid(),name:card.name||"?",types:card.types||[],bio:card.bio||"",image:card.image||null,abilities:card.abilities||[],note:typeof card.note==="number"?card.note:50};
+  state.creatures.push(c);currentId=c.id;mode="view";flash="Carte importée !";saveLocal();render();}catch(e){alert("Code invalide");}}
+
+/* ===================== AMIS ===================== */
+function openFriends(){mode="friends";render();}
+function copyMyCode(){try{navigator.clipboard.writeText(currentUserId);}catch(e){}
+  flash="Ton code d'ami est copié !";render();}
+async function addFriendByCode(){
+  const code=prompt("Colle le code d'ami de ton copain :");
+  if(!code||!code.trim())return;
+  const fid=code.trim();
+  if(fid===currentUserId){alert("C'est ton propre code 😅");return;}
+  // On lui envoie une demande d'ami. Il l'acceptera de son côté.
+  await sendMsg(fid,{kind:"friend_req",from:currentUserId,fromName:currentUsername});
+  flash="Demande d'ami envoyée !";render();
+}
+
+/* ===================== INITIER UN DÉFI / ÉCHANGE ===================== */
+function startCombatPick(fid,fname){pendingTarget={id:fid,name:fname};mode="combat_pick";render();}
+function startTradePick(fid,fname){pendingTarget={id:fid,name:fname};mode="trade_pick";render();}
+
+async function sendCombatTo(cardId){
+  const c=findCard(cardId); if(!c||!pendingTarget)return;
+  await sendMsg(pendingTarget.id,{kind:"combat_challenge",from:currentUserId,fromName:currentUsername,card:{...c}});
+  flash="⚔️ Défi envoyé à "+pendingTarget.name+" !";
+  pendingTarget=null;mode="view";render();
+}
+async function sendTradeTo(cardId){
+  const c=findCard(cardId); if(!c||!pendingTarget)return;
+  await sendMsg(pendingTarget.id,{kind:"trade_offer",from:currentUserId,fromName:currentUsername,card:{...c}});
+  flash="🔄 Échange proposé à "+pendingTarget.name+" !";
+  pendingTarget=null;mode="view";render();
+}
+
+/* ===================== RÉPONDRE (celui qui reçoit) ===================== */
+function startCombatRespond(notifId){pendingNotif=state.notifications.find(n=>n.id===notifId);if(!pendingNotif)return;mode="combat_respond";render();}
+function startTradeRespond(notifId){pendingNotif=state.notifications.find(n=>n.id===notifId);if(!pendingNotif)return;mode="trade_respond";render();}
+
+async function resolveCombat(myCardId){
+  const ch=pendingNotif; const my=findCard(myCardId);
+  if(!ch||!my)return;
+  const aNote=noteOf(ch.card);   // note du challenger
+  const bNote=noteOf(my);        // ma note (celui qui répond)
+  let mineOutcome, stolen=null, lost=null;
+  if(aNote>bNote){
+    // le challenger a plus d'étoiles → il gagne et me vole MA carte
+    state.creatures=state.creatures.filter(c=>c.id!==my.id);
+    await sendMsg(ch.from,{kind:"combat_result",from:currentUserId,fromName:currentUsername,outcome:"win",stolenCard:{...my},foeNote:bNote,winnerNote:aNote});
+    mineOutcome="lose"; lost=my.name;
+  }else if(bNote>aNote){
+    // j'ai plus d'étoiles → je gagne et je vole SA carte
+    state.creatures.push({...ch.card,id:uid()});
+    await sendMsg(ch.from,{kind:"combat_result",from:currentUserId,fromName:currentUsername,outcome:"lose",lostCardId:ch.card.id,foeNote:bNote});
+    mineOutcome="win"; stolen=ch.card.name;
+  }else{
+    await sendMsg(ch.from,{kind:"combat_result",from:currentUserId,fromName:currentUsername,outcome:"tie",foeNote:bNote});
+    mineOutcome="tie";
+  }
+  bResult={outcome:mineOutcome,mineName:my.name,mineNote:bNote,foeName:ch.fromName,foeNote:aNote,stolen,lost};
+  removeNotif(ch.id); pendingNotif=null; mode="battle_result"; saveLocal(); render();
+}
+
+async function resolveTrade(myCardId){
+  const offer=pendingNotif; const my=findCard(myCardId);
+  if(!offer||!my)return;
+  // Je donne "my", je reçois "offer.card"
+  state.creatures=state.creatures.filter(c=>c.id!==my.id);
+  state.creatures.push({...offer.card,id:uid()});
+  await sendMsg(offer.from,{kind:"trade_result",from:currentUserId,fromName:currentUsername,takenBackId:offer.card.id,receivedCard:{...my}});
+  removeNotif(offer.id); pendingNotif=null;
+  flash="🔄 Échange fait ! Tu reçois "+offer.card.name+" et tu donnes "+my.name;
+  mode="view"; saveLocal(); render();
+}
+
+/* ===================== NOTIFICATIONS ===================== */
+function openNotif(){mode="notif";poll();render();}
+function addInfo(text){state.notifications.push({id:uid(),kind:"info",text});}
+function removeNotif(id){state.notifications=state.notifications.filter(n=>n.id!==id);}
+function dismissInfo(id){removeNotif(id);saveLocal();render();}
+
+async function acceptFriend(notifId){
+  const n=state.notifications.find(x=>x.id===notifId); if(!n)return;
+  if(!state.friends.find(f=>f.userId===n.from)) state.friends.push({userId:n.from,username:n.fromName});
+  await sendMsg(n.from,{kind:"friend_acc",from:currentUserId,fromName:currentUsername});
+  removeNotif(notifId); saveLocal(); render();
+}
+async function refuseNotif(notifId){
+  const n=state.notifications.find(x=>x.id===notifId); if(!n)return;
+  if(n.kind==="combat_challenge") await sendMsg(n.from,{kind:"combat_decline",from:currentUserId,fromName:currentUsername});
+  else if(n.kind==="trade_offer") await sendMsg(n.from,{kind:"trade_decline",from:currentUserId,fromName:currentUsername});
+  removeNotif(notifId); saveLocal(); render();
+}
+
+/* Traitement d'un message reçu dans ma boîte partagée */
+function handleMsg(m){
+  switch(m.kind){
+    case "friend_req":
+      if(!state.notifications.find(n=>n.kind==="friend_req"&&n.from===m.from))
+        state.notifications.push({id:m.id||uid(),kind:"friend_req",from:m.from,fromName:m.fromName});
+      break;
+    case "friend_acc":
+      if(!state.friends.find(f=>f.userId===m.from)) state.friends.push({userId:m.from,username:m.fromName});
+      addInfo("👥 "+m.fromName+" est maintenant ton ami !");
+      break;
+    case "combat_challenge":
+      state.notifications.push({id:m.id||uid(),kind:"combat_challenge",from:m.from,fromName:m.fromName,card:m.card});
+      break;
+    case "trade_offer":
+      state.notifications.push({id:m.id||uid(),kind:"trade_offer",from:m.from,fromName:m.fromName,card:m.card});
+      break;
+    case "combat_result":{
+      if(m.outcome==="win"){ // j'avais lancé le défi et j'ai gagné → je vole
+        state.creatures.push({...m.stolenCard,id:uid()});
+        addInfo("🏆 Combat gagné contre "+m.fromName+" ! Tu voles "+m.stolenCard.name+" ⭐"+noteOf(m.stolenCard));
+      }else if(m.outcome==="lose"){ // j'ai perdu → ma carte est volée
+        const lost=findCard(m.lostCardId);
+        state.creatures=state.creatures.filter(c=>c.id!==m.lostCardId);
+        addInfo("💀 Combat perdu contre "+m.fromName+". "+(lost?lost.name:"Ta carte")+" a été volée.");
+      }else{
+        addInfo("🤝 Égalité au combat contre "+m.fromName+". Personne ne vole !");
+      }
+      break;
+    }
+    case "trade_result":{ // mon échange a été accepté
+      const gave=findCard(m.takenBackId);
+      state.creatures=state.creatures.filter(c=>c.id!==m.takenBackId);
+      state.creatures.push({...m.receivedCard,id:uid()});
+      addInfo("🔄 Échange avec "+m.fromName+" : tu reçois "+m.receivedCard.name+(gave?", tu donnes "+gave.name:"")+".");
+      break;
+    }
+    case "combat_decline": addInfo("⚔️ "+m.fromName+" a refusé ton défi."); break;
+    case "trade_decline":  addInfo("🔄 "+m.fromName+" a refusé ton échange."); break;
+  }
+}
+
+/* ===================== POLLING (réception) ===================== */
+async function poll(){
+  if(!currentUserId) return;
+  let changed=false;
+  const keys=await store.list("msg:"+currentUserId+":", true);
+  for(const key of keys){
+    if(processedMsgKeys.has(key)) continue;
+    const raw=await store.get(key,true);
+    if(raw){ try{ handleMsg(JSON.parse(raw)); changed=true; }catch(e){} }
+    processedMsgKeys.add(key);
+    await store.del(key,true);
+  }
+  if(changed){ saveLocal(); updateBadge(); if(!PROTECTED.has(mode)) render(); }
+  else updateBadge();
+}
+function updateBadge(){
+  const badge=document.getElementById("notifBadge");
+  if(!badge)return;
+  const cnt=state.notifications.length;
+  badge.textContent=cnt; badge.style.display=cnt>0?"flex":"none";
+}
+
+/* ===================== HELPERS UI ===================== */
+function cardPickList(fn){
+  return myCreatures().map(c=>'<div class="pick" onclick="'+fn+'(\''+c.id+'\')"><img src="'+(c.image||PLACEHOLDER)+'"/><div class="info"><b>'+esc(c.name)+'</b></div><span class="badge">⭐'+noteOf(c)+'</span></div>').join("");
+}
+
+/* ===================== RENDER ===================== */
+function render(){
+  const screen=document.getElementById("screen"), controls=document.getElementById("controls");
+  updateBadge();
+
+  if(mode==="login"){
+    screen.innerHTML='<div class="login-form"><div class="logo"><div class="logo-icon">🎮</div><div class="logo-title">CréaDex</div><div class="logo-sub">Ta collection de créatures</div></div><label>Ton prénom</label><input class="input" id="un" autofocus /><button class="btn add" onclick="register(document.getElementById(\'un\').value)">Commencer</button></div>';
+    controls.innerHTML=''; return;
+  }
+
+  if(mode==="notif"){
+    const cnt=state.notifications.length;
+    let h='<div class="h2">🔔 Notifications ('+cnt+')</div>';
+    if(!HAS_WS) h+='<div class="warn">⚠️ Mode local : les demandes ne partiront pas vers les autres appareils. Ouvre l\'app partagée dans Claude pour jouer à plusieurs. Le partage par code marche partout.</div>';
+    if(!cnt) h+='<div class="msg">Aucune notification. Tire vers le bas / rouvre pour rafraîchir.</div>';
+    else h+=state.notifications.map(n=>{
+      if(n.kind==="friend_req")
+        return '<div class="notif-item"><div class="notif-type">👥 Demande d\'ami</div><div class="notif-from">'+esc(n.fromName)+'</div><div class="notif-action"><button class="notif-accept" onclick="acceptFriend(\''+n.id+'\')">✅ Accepter</button><button class="notif-refuse" onclick="refuseNotif(\''+n.id+'\')">❌ Refuser</button></div></div>';
+      if(n.kind==="combat_challenge")
+        return '<div class="notif-item"><div class="notif-type">⚔️ Défi de combat</div><div class="notif-from">'+esc(n.fromName)+'</div><div class="notif-body">Sa créature : <b>'+esc(n.card.name)+'</b> ⭐'+noteOf(n.card)+'</div><div class="notif-action"><button class="notif-accept" onclick="startCombatRespond(\''+n.id+'\')">⚔️ Combattre</button><button class="notif-refuse" onclick="refuseNotif(\''+n.id+'\')">❌ Refuser</button></div></div>';
+      if(n.kind==="trade_offer")
+        return '<div class="notif-item"><div class="notif-type">🔄 Proposition d\'échange</div><div class="notif-from">'+esc(n.fromName)+'</div><div class="notif-body">Il t\'offre : <b>'+esc(n.card.name)+'</b> ⭐'+noteOf(n.card)+'</div><div class="notif-action"><button class="notif-accept" onclick="startTradeRespond(\''+n.id+'\')">🔄 Échanger</button><button class="notif-refuse" onclick="refuseNotif(\''+n.id+'\')">❌ Refuser</button></div></div>';
+      if(n.kind==="info")
+        return '<div class="notif-item"><div class="notif-body" style="margin:0">'+esc(n.text)+'</div><div class="notif-action"><button class="notif-x" onclick="dismissInfo(\''+n.id+'\')">OK</button></div></div>';
+      return '';
+    }).join('');
+    screen.innerHTML=h;
+    controls.innerHTML='<button class="back" onclick="mode=\'view\';render()">← Retour</button>';
+    return;
+  }
+
+  if(mode==="friends"){
+    let h='<div class="h2">👥 Mes amis</div>';
+    if(!HAS_WS) h+='<div class="warn">⚠️ Pour jouer à plusieurs en direct, ouvre la version partagée de l\'app dans Claude (les deux joueurs sur le même lien).</div>';
+    if(state.friends.length){
+      h+='<div class="groupt">Défie ou échange</div>';
+      h+=state.friends.map(f=>'<div class="plist"><b>'+esc(f.username)+'</b><div class="plist-action"><button style="background:#e0574f" onclick="startCombatPick(\''+f.userId+'\',\''+esc(f.username).replace(/'/g,"")+'\')">⚔️</button><button onclick="startTradePick(\''+f.userId+'\',\''+esc(f.username).replace(/'/g,"")+'\')">🔄</button></div></div>').join("");
+    }else{
+      h+='<div class="msg">Aucun ami pour l\'instant. Donne ton code à un copain, ou ajoute le sien.</div>';
+    }
+    h+='<div class="groupt">Mon code d\'ami</div><div class="plist"><b style="font-family:monospace;font-size:13px">'+currentUserId+'</b><button class="notif-x" onclick="copyMyCode()">Copier</button></div>';
+    h+='<button class="full" style="background:var(--shell2);box-shadow:0 3px 0 var(--shell3);margin-top:12px" onclick="addFriendByCode()">➕ Ajouter un ami par code</button>';
+    screen.innerHTML=h;
+    controls.innerHTML='<button class="back" onclick="mode=\'view\';render()">← Retour</button>';
+    return;
+  }
+
+  if(mode==="combat_pick"||mode==="trade_pick"){
+    const isC=mode==="combat_pick";
+    let h='<div class="h2">'+(isC?"⚔️ Défier ":"🔄 Échanger avec ")+esc(pendingTarget?pendingTarget.name:"")+'</div><div class="sub">'+(isC?"Choisis ta créature pour le combat.":"Choisis la carte à proposer.")+'</div>';
+    if(!myCreatures().length) h+='<div class="msg">Tu n\'as aucune créature.</div>';
+    else h+=cardPickList(isC?"sendCombatTo":"sendTradeTo");
+    screen.innerHTML=h;
+    controls.innerHTML='<button class="back" onclick="pendingTarget=null;mode=\'friends\';render()">← Retour</button>';
+    return;
+  }
+
+  if(mode==="combat_respond"){
+    const ch=pendingNotif;
+    let h='<div class="h2">⚔️ Combat contre '+esc(ch.fromName)+'</div><div class="sub">Sa créature : <b>'+esc(ch.card.name)+'</b> ⭐'+noteOf(ch.card)+'. Le plus d\'étoiles vole la carte de l\'autre !</div>';
+    if(!myCreatures().length) h+='<div class="msg">Tu n\'as aucune créature à opposer.</div>';
+    else h+='<div class="groupt">Ta créature</div>'+cardPickList("resolveCombat");
+    screen.innerHTML=h;
+    controls.innerHTML='<button class="back" onclick="pendingNotif=null;mode=\'notif\';render()">← Retour</button>';
+    return;
+  }
+
+  if(mode==="trade_respond"){
+    const of=pendingNotif;
+    let h='<div class="h2">🔄 Échange avec '+esc(of.fromName)+'</div><div class="sub">Il t\'offre <b>'+esc(of.card.name)+'</b> ⭐'+noteOf(of.card)+'. Choisis la carte à donner en échange.</div>';
+    if(!myCreatures().length) h+='<div class="msg">Tu n\'as aucune carte à donner.</div>';
+    else h+='<div class="groupt">Ta carte</div>'+cardPickList("resolveTrade");
+    screen.innerHTML=h;
+    controls.innerHTML='<button class="back" onclick="pendingNotif=null;mode=\'notif\';render()">← Retour</button>';
+    return;
+  }
+
+  if(mode==="battle_result"){
+    const r=bResult;
+    const title=r.outcome==="win"?"🏆 Gagné !":r.outcome==="lose"?"💀 Perdu…":"🤝 Égalité";
+    let sub="";
+    if(r.outcome==="win") sub="Tu voles <b>"+esc(r.stolen)+"</b> à "+esc(r.foeName)+" !";
+    else if(r.outcome==="lose") sub="<b>"+esc(r.lost)+"</b> a été volée par "+esc(r.foeName)+".";
+    else sub="Personne ne vole de carte.";
+    screen.innerHTML='<div class="result"><div class="big">'+title+'</div><div class="vs"><div class="card2"><div class="ph3">🫵</div><div class="n2">'+esc(r.mineName)+'</div><div class="sc">⭐'+r.mineNote+'</div></div><div class="mid">VS</div><div class="card2"><div class="ph3">👤</div><div class="n2">'+esc(r.foeName)+'</div><div class="sc">⭐'+r.foeNote+'</div></div></div><div class="sub" style="margin-top:6px">'+sub+'</div></div>';
+    controls.innerHTML='<button class="back" onclick="mode=\'view\';render()">← Accueil</button>';
+    return;
+  }
+
+  if(mode==="form"){
+    const tb=TYPES.map(t=>'<button class="typebtn '+(t.dark?'dk':'')+' '+(form.types.includes(t.id)?'on':'')+'" style="background:'+t.color+'" onclick="toggleType(\''+t.id+'\')">'+t.emoji+'</button>').join("");
+    const al=form.abilities.map((a,i)=>'<div class="abilitem"><span class="txt">'+esc(a.name)+(a.desc?'<small>'+esc(a.desc)+'</small>':'')+'</span><button class="xbtn" onclick="removeAbility('+i+')">×</button></div>').join("");
+    screen.innerHTML='<div><label>Photo</label><div class="photobox" onclick="pickImage()">'+(form.image?'<img src="'+form.image+'">':'<div class="pi">📷</div><div class="pt">Ajouter une photo</div>')+'</div><label>Nom</label><input class="input" id="fName" /><label>Types (max 3)</label><div class="typegrid">'+tb+'</div><label>Note / étoiles (0-100)</label><input class="input" id="fNote" type="number" min="0" max="100" value="50" /><label>Description</label><textarea class="area" id="fBio"></textarea><label>Capacités</label><div class="abilrow"><input class="input" id="abName" placeholder="Nom" /><input class="input" id="abDesc" placeholder="Effet" /><button class="mini" onclick="addAbility()">+</button></div><div>'+al+'</div><div class="formbtns"><button class="btn save" onclick="saveCreature()">✓ Enregistrer</button><button class="btn cancel" onclick="mode=\'view\';form=null;render()">✕</button></div></div>';
+    controls.innerHTML='';
+    document.getElementById("fName").value=form.name;
+    document.getElementById("fBio").value=form.bio;
+    document.getElementById("fNote").value=form.note;
+    return;
+  }
+
+  if(mode==="share"){
+    let h='<div class="h2">📤 Partager par code</div><div class="sub">Copie le code et envoie-le à un copain (marche partout).</div>';
+    if(shareCode) h+='<textarea class="code" id="codeBox">'+shareCode+'</textarea><button class="full" onclick="copyCode()">📋 Copier</button>';
+    if(!myCreatures().length) h+='<div class="msg">Aucune créature</div>';
+    else h+='<div class="groupt">Choisir</div>'+myCreatures().map(c=>'<div class="pick"><img src="'+(c.image||PLACEHOLDER)+'"/><div class="info"><b>'+esc(c.name)+'</b><small>⭐'+noteOf(c)+'</small></div></div><div class="abilrow"><button class="actbtn" style="flex:1" onclick="shareCard(\''+c.id+'\',false)">Copie</button><button class="actbtn" style="flex:1;background:var(--danger)" onclick="shareCard(\''+c.id+'\',true)">Donner</button></div>').join("");
+    screen.innerHTML=h;
+    controls.innerHTML='<button class="back" onclick="mode=\'view\';render()">← Retour</button>';
+    return;
+  }
+
+  if(mode==="import"){
+    screen.innerHTML='<div class="h2">📥 Importer par code</div><textarea class="code" id="impBox" placeholder="Colle le code ici..."></textarea><button class="full" onclick="doImport()">✅ Ajouter</button>';
+    controls.innerHTML='<button class="back" onclick="mode=\'view\';render()">← Retour</button>';
+    return;
+  }
+
+  /* ---- VUE PRINCIPALE ---- */
+  const mine=myCreatures();
+  const cur=mine.find(c=>c.id===currentId);
+  const idx=mine.findIndex(c=>c.id===currentId);
+  const flashHtml=flash?'<div class="msg">'+esc(flash)+'</div>':''; flash="";
+
+  if(!cur){
+    screen.innerHTML=flashHtml+'<div class="empty"><div class="icon">🔍</div><h2>Dex vide</h2><p>Crée ta première créature !</p></div>';
+    controls.innerHTML='<button class="btn add" onclick="openForm()">＋ Créer</button><div class="actrow"><button class="actbtn" onclick="openFriends()">👥 Amis</button><button class="actbtn" onclick="openImport()">📥 Importer</button></div><div class="actrow"><button class="actbtn" onclick="handleLogout()">🚪 Déconnexion</button></div>';
+    return;
+  }
+
+  const chips=cur.types.map(id=>{const t=typeById(id);return t?'<span class="chip '+(t.dark?'dk':'')+'" style="background:'+t.color+'">'+t.emoji+' '+t.label+'</span>':'';}).join("");
+  const abil=cur.abilities.map(a=>'<div class="abil"><div class="n">'+esc(a.name)+'</div>'+(a.desc?'<div class="d">'+esc(a.desc)+'</div>':'')+'</div>').join("");
+
+  screen.innerHTML=flashHtml+'<div class="num">N°'+String(idx+1).padStart(3,"0")+'</div>'+(cur.image?'<img class="photo" src="'+cur.image+'">':'<div class="photo ph">❓</div>')+'<div class="name">'+esc(cur.name)+'</div>'+(chips?'<div class="chips">'+chips+'</div>':'')+('<div class="note"><span class="lab">⭐ Note</span><span class="val">'+noteOf(cur)+'</span></div>')+(cur.bio?'<div class="bio">"'+esc(cur.bio)+'"</div>':'')+(cur.abilities.length?'<div class="sec-h">Capacités</div>'+abil:'');
+
+  const strip=mine.map(c=>'<div class="thumb '+(c.id===currentId?'sel':'')+'" onclick="select(\''+c.id+'\')"><img src="'+(c.image||PLACEHOLDER.replace('%23eef3e8','%234a4f72'))+'"/></div>').join("");
+
+  controls.innerHTML='<div class="nav"><button class="arrow" onclick="go(-1)" '+(idx<=0?'disabled':'')+'>‹</button><span class="count">'+(idx+1)+'/'+mine.length+'</span><button class="arrow" onclick="go(1)" '+(idx>=mine.length-1?'disabled':'')+'>›</button></div><div class="strip">'+strip+'</div><button class="btn add" onclick="openForm()">＋ Créer</button><div class="actrow"><button class="actbtn" onclick="openFriends()">👥 Amis</button><button class="actbtn" onclick="openNotif()">🔔 Notifs</button></div><div class="actrow"><button class="actbtn" onclick="openShare()">📤 Code</button><button class="actbtn" onclick="openImport()">📥 Import</button></div><div class="actrow"><button class="actbtn" onclick="handleLogout()">🚪 Déco</button><button class="actbtn" style="background:var(--danger);box-shadow:0 3px 0 #c94a4a" onclick="deleteCurrent()">🗑 Suppr</button></div>';
+}
+
+/* ===================== BOOT ===================== */
+(async()=>{
+  const ok=await loadMe();
+  mode= ok? "view":"login";
+  if(ok){ publishProfile(); }
+  render();
+  if(ok) poll();
+  setInterval(poll, 5000);
+})();
+</script>
+</body>
+</html>
