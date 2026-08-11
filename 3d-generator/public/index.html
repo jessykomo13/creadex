@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0f1115" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="CréaDex 3D" />
+<link rel="manifest" href="./manifest.json" />
+<link rel="apple-touch-icon" href="./icon.svg" />
+<link rel="icon" href="./icon.svg" type="image/svg+xml" />
+<title>CréaDex 3D — Générateur IA</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: #0f1115;
+    color: #eaeaf0;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    min-height: 100dvh;
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+    padding-bottom: env(safe-area-inset-bottom);
+    overflow-x: hidden;
+  }
+  header {
+    padding: 1.2rem 1.5rem;
+    padding-top: max(1.2rem, env(safe-area-inset-top));
+    border-bottom: 1px solid #23262f;
+  }
+  header h1 { margin: 0; font-size: 1.3rem; }
+  header p { margin: .3rem 0 0; color: #9a9db0; font-size: .9rem; }
+  main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: minmax(280px, 380px) 1fr;
+    gap: 1rem;
+    padding: 1rem 1.5rem;
+  }
+  @media (max-width: 800px) {
+    main { grid-template-columns: 1fr; padding: .8rem; gap: .8rem; }
+    header { padding: 1rem; }
+    #viewer { min-height: 55vh; order: -1; }
+  }
+  .panel {
+    background: #171a21;
+    border: 1px solid #23262f;
+    border-radius: 12px;
+    padding: 1rem;
+  }
+  .tabs { display: flex; gap: .5rem; margin-bottom: 1rem; }
+  .tab {
+    flex: 1;
+    padding: .7rem .5rem;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    border-radius: 8px;
+    cursor: pointer;
+    background: #1e222c;
+    border: 1px solid #2a2e3a;
+    font-size: .9rem;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+  }
+  .tab.active { background: #3a5bfd; border-color: #3a5bfd; color: #fff; }
+  .field { margin-bottom: 1rem; }
+  .field label { display: block; margin-bottom: .4rem; font-size: .85rem; color: #b7bacb; }
+  textarea, input[type=text] {
+    width: 100%;
+    padding: .6rem;
+    border-radius: 8px;
+    border: 1px solid #2a2e3a;
+    background: #0f1115;
+    color: #eaeaf0;
+    resize: vertical;
+    font-family: inherit;
+    font-size: 16px; /* evite le zoom automatique au focus sur iOS */
+  }
+  .dropzone {
+    border: 2px dashed #2a2e3a;
+    border-radius: 10px;
+    padding: 1.5rem;
+    text-align: center;
+    color: #9a9db0;
+    cursor: pointer;
+    font-size: .85rem;
+    min-height: 44px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .dropzone.drag { border-color: #3a5bfd; color: #eaeaf0; }
+  .dropzone img { max-width: 100%; max-height: 140px; border-radius: 8px; margin-top: .6rem; }
+  button.primary {
+    width: 100%;
+    padding: .8rem;
+    min-height: 48px;
+    border: none;
+    border-radius: 8px;
+    background: #3a5bfd;
+    color: #fff;
+    font-weight: 600;
+    cursor: pointer;
+    font-size: .95rem;
+    -webkit-tap-highlight-color: transparent;
+  }
+  button.primary:disabled { opacity: .5; cursor: not-allowed; }
+  .status {
+    margin-top: 1rem;
+    font-size: .85rem;
+    color: #b7bacb;
+    white-space: pre-wrap;
+  }
+  .status.error { color: #ff6b6b; }
+  .status.ok { color: #6bffb0; }
+  #viewer {
+    background: #10131a;
+    border: 1px solid #23262f;
+    border-radius: 12px;
+    position: relative;
+    min-height: 420px;
+  }
+  #viewer canvas { display: block; border-radius: 12px; }
+  #viewer .placeholder {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    color: #4c5064; font-size: .9rem; text-align: center; padding: 2rem;
+  }
+  .download {
+    display: none;
+    margin-top: .8rem;
+    text-align: center;
+  }
+  .download a {
+    color: #6bb0ff;
+    text-decoration: none;
+    font-size: .85rem;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>CréaDex 3D — Générateur IA</h1>
+  <p>Importe une image ou décris un objet en texte : génération 3D par IA, prévisualisation et export .glb pour ton jeu.</p>
+</header>
+
+<main>
+  <section class="panel">
+    <div class="tabs">
+      <div class="tab active" data-tab="image">Image → 3D</div>
+      <div class="tab" data-tab="text">Texte → 3D</div>
+    </div>
+
+    <div id="tab-image">
+      <div class="field">
+        <label>Image source</label>
+        <div class="dropzone" id="dropzone">
+          Glisse une image ici ou clique pour choisir un fichier
+          <input type="file" id="fileInput" accept="image/*" hidden />
+          <div id="preview"></div>
+        </div>
+      </div>
+      <button class="primary" id="btnImage">Générer le modèle 3D</button>
+    </div>
+
+    <div id="tab-text" style="display:none">
+      <div class="field">
+        <label>Décris l'objet à générer</label>
+        <textarea id="promptInput" rows="4" placeholder="Ex: une épée médiévale low-poly stylisée"></textarea>
+      </div>
+      <button class="primary" id="btnText">Générer le modèle 3D</button>
+    </div>
+
+    <div id="status" class="status"></div>
+    <div class="download" id="download">
+      <a id="downloadLink" href="#" target="_blank">⬇ Télécharger le fichier .glb</a>
+    </div>
+  </section>
+
+  <section id="viewer">
+    <div class="placeholder" id="viewerPlaceholder">
+      Le modèle 3D généré s'affichera ici.<br/>
+      (Nécessite une clé API configurée côté serveur — voir README.md)
+    </div>
+  </section>
+</main>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.164.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.164.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module" src="./app.js"></script>
+</body>
+</html>

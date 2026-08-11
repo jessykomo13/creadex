@@ -1,0 +1,13 @@
+{
+  "name": "CréaDex 3D — Générateur IA",
+  "short_name": "CréaDex 3D",
+  "description": "Importe une image ou un texte, génère un modèle 3D par IA et exporte-le en .glb pour ton jeu.",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#0f1115",
+  "theme_color": "#0f1115",
+  "orientation": "portrait-primary",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
