@@ -56,6 +56,33 @@ npm start
 
 Puis ouvre `http://localhost:3000`.
 
+## Utilisation sur mobile
+
+L'app est responsive (mise en page adaptée aux petits écrans, cibles tactiles
+≥ 44px, viewer 3D en priorité en haut sur mobile) et peut être "installée"
+comme une app via **Ajouter à l'écran d'accueil** (manifest + icône fournis).
+
+### Tester depuis ton téléphone dès maintenant (sans déploiement)
+
+1. Lance le serveur sur ton ordi : `npm start`
+2. Trouve l'IP locale de ton ordi (même réseau Wi-Fi que le téléphone) :
+   - macOS/Linux : `ipconfig getifaddr en0` ou `hostname -I`
+   - Windows : `ipconfig` (champ "Adresse IPv4")
+3. Sur le téléphone, ouvre `http://<IP-de-ton-ordi>:3000` (ex: `http://192.168.1.23:3000`)
+4. Depuis Safari (iOS) ou Chrome (Android) : menu → **Ajouter à l'écran d'accueil**
+   pour un lancement en plein écran comme une vraie app.
+
+⚠️ Le mode "Image → 3D" restera bloqué en local (voir section suivante) tant
+que le serveur n'est pas accessible publiquement — le mode "Texte → 3D"
+fonctionne déjà tel quel en réseau local.
+
+### Pour un accès mobile permanent (pas juste sur le même Wi-Fi)
+
+Déploie le serveur sur un hébergeur public (Render, Fly.io, Railway...), le
+téléphone y accédera alors via l'URL publique, de n'importe où — et ça règle
+en même temps la contrainte "image publique" ci-dessous. Dis-moi si tu veux
+que je prépare la config de déploiement pour un hébergeur en particulier.
+
 ## Limite connue : image publique requise
 
 Certains providers (dont Replicate) exigent une URL d'image **accessible
