@@ -2,6 +2,7 @@
 #include <vector>
 #include <memory>
 #include <string>
+#include <cstdio>
 
 #include <GLFW/glfw3.h>
 
@@ -33,13 +34,36 @@ void main() {
 }
 )";
 
+static const char* DEFAULT_SCRIPT_TEMPLATE =
+"// Logique de \"%s\"\n"
+"// Ceci n'est pas encore execute automatiquement : c'est ta zone pour\n"
+"// preparer/noter le comportement de cet objet (collisions, pieges, vie...).\n"
+"// La prochaine etape sera de rendre ce script reellement executable.\n"
+"\n"
+"on_collision(joueur):\n"
+"    // exemple : piege qui enleve une vie et repousse le joueur\n"
+"    joueur.vie -= 1\n"
+"    joueur.velocite.y = 8.0\n"
+"    if joueur.vie <= 0:\n"
+"        redemarrer_niveau()\n";
+
 struct SceneObject {
     std::string name;
     WEngine::Vec3 position;
     WEngine::Vec3 tint{ 1.0f, 1.0f, 1.0f };
     float rotationSpeed = 0.0f;
     float pickRadius = 0.9f;
+    std::string script;
 };
+
+static int ScriptEditCallback(ImGuiInputTextCallbackData* data) {
+    if (data->EventFlag == ImGuiInputTextFlags_CallbackResize) {
+        std::string* str = (std::string*)data->UserData;
+        str->resize(data->BufTextLen);
+        data->Buf = (char*)str->c_str();
+    }
+    return 0;
+}
 
 static const WEngine::Vec3 AXIS_X(1.0f, 0.0f, 0.0f);
 static const WEngine::Vec3 AXIS_Y(0.0f, 1.0f, 0.0f);
@@ -230,6 +254,10 @@ public:
             ImGui::ColorEdit3("Couleur", &obj.tint.x);
             ImGui::DragFloat("Vitesse rotation", &obj.rotationSpeed, 0.02f, 0.0f, 5.0f);
             ImGui::Separator();
+            if (ImGui::Button("</> Ouvrir le script (N)", ImVec2(-1, 0))) {
+                OpenScriptEditor(m_Selected);
+            }
+            ImGui::Separator();
             if (ImGui::Button("Supprimer", ImVec2(-1, 0))) {
                 m_Objects.erase(m_Objects.begin() + m_Selected);
                 m_Selected = -1;
@@ -238,6 +266,22 @@ public:
             ImGui::TextDisabled("Selectionne un objet dans l'Outliner ou clique dessus dans la scene.");
         }
         ImGui::End();
+
+        if (m_ShowScriptEditor && m_ScriptTarget >= 0 && m_ScriptTarget < (int)m_Objects.size()) {
+            SceneObject& obj = m_Objects[m_ScriptTarget];
+            std::string title = "</> Script - " + obj.name;
+            ImGui::SetNextWindowSize(ImVec2(520, 380), ImGuiCond_FirstUseEver);
+            if (ImGui::Begin(title.c_str(), &m_ShowScriptEditor)) {
+                ImGui::TextDisabled("Code de \"%s\" (pas encore execute automatiquement)", obj.name.c_str());
+                ImGui::Separator();
+                ImGui::InputTextMultiline(
+                    "##script", (char*)obj.script.c_str(), obj.script.capacity() + 1,
+                    ImVec2(-1, -1),
+                    ImGuiInputTextFlags_CallbackResize | ImGuiInputTextFlags_AllowTabInput,
+                    ScriptEditCallback, &obj.script);
+            }
+            ImGui::End();
+        }
 
         ImGui::Begin("Stats");
         ImGui::Text("FPS: %.0f", m_LastFrameTime > 0.0f ? 1.0f / m_LastFrameTime : 0.0f);
@@ -254,10 +298,26 @@ public:
         if (event.GetEventType() == WEngine::EventType::KeyPressed) {
             auto& e = static_cast<WEngine::KeyPressedEvent&>(event);
             constexpr int KEY_ESCAPE = 256;
+            constexpr int KEY_N = 78;
             if (e.GetKeyCode() == KEY_ESCAPE) {
                 WEngine::Application::Get().Close();
             }
+            if (e.GetKeyCode() == KEY_N && !e.IsRepeat() && !ImGui::GetIO().WantTextInput
+                && m_Selected >= 0 && m_Selected < (int)m_Objects.size()) {
+                OpenScriptEditor(m_Selected);
+            }
         }
+    }
+
+    void OpenScriptEditor(int index) {
+        SceneObject& obj = m_Objects[index];
+        if (obj.script.empty()) {
+            char buf[1024];
+            snprintf(buf, sizeof(buf), DEFAULT_SCRIPT_TEMPLATE, obj.name.c_str());
+            obj.script = buf;
+        }
+        m_ScriptTarget = index;
+        m_ShowScriptEditor = true;
     }
 
 private:
@@ -277,6 +337,9 @@ private:
     int m_DraggingAxis = -1;
     WEngine::Vec3 m_DragOriginPos;
     float m_DragStartOffset = 0.0f;
+
+    bool m_ShowScriptEditor = false;
+    int m_ScriptTarget = -1;
 };
 
 class SandboxApp : public WEngine::Application {
