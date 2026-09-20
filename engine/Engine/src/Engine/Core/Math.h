@@ -26,6 +26,11 @@ namespace WEngine {
         }
     };
 
+    struct Ray {
+        Vec3 origin;
+        Vec3 direction;
+    };
+
     // Column-major 4x4 matrix, layout matches OpenGL / GLSL expectations.
     struct Mat4 {
         float m[16] = { 0 };
@@ -94,5 +99,29 @@ namespace WEngine {
             return r;
         }
     };
+
+    // Renvoie true si le rayon touche la sphere ; outT est la distance du point d'impact le plus proche.
+    inline bool RaySphereIntersect(const Ray& ray, const Vec3& center, float radius, float& outT) {
+        Vec3 oc = ray.origin - center;
+        float b = Vec3::Dot(oc, ray.direction);
+        float c = Vec3::Dot(oc, oc) - radius * radius;
+        float disc = b * b - c;
+        if (disc < 0.0f) return false;
+        float t = -b - std::sqrt(disc);
+        if (t < 0.0f) t = -b + std::sqrt(disc);
+        if (t < 0.0f) return false;
+        outT = t;
+        return true;
+    }
+
+    // Renvoie true si le rayon touche le plan (planePoint, planeNormal) devant la camera.
+    inline bool RayPlaneIntersect(const Ray& ray, const Vec3& planePoint, const Vec3& planeNormal, Vec3& outPoint) {
+        float denom = Vec3::Dot(planeNormal, ray.direction);
+        if (std::fabs(denom) < 1e-6f) return false;
+        float t = Vec3::Dot(planePoint - ray.origin, planeNormal) / denom;
+        if (t < 0.0f) return false;
+        outPoint = ray.origin + ray.direction * t;
+        return true;
+    }
 
 } // namespace WEngine

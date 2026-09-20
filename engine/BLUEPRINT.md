@@ -75,6 +75,21 @@ engine/
   (vérifié via `ImGui::GetIO().WantCaptureMouse` avant de mettre à jour
   `Camera::OnUpdate`).
 
+## Selection et gizmo de deplacement (style Unreal)
+
+- `Core/Math.h` — `Ray`, `RaySphereIntersect`, `RayPlaneIntersect`.
+- `Camera::ScreenPointToRay()` — transforme une position souris (pixels)
+  en rayon 3D partant de la camera, sans avoir besoin d'inverser une
+  matrice (formule directe a partir du FOV/aspect et des axes camera).
+- Dans `SandboxApp.cpp` : **clic gauche sur un objet** dans la scene le
+  selectionne (en plus de l'Outliner) ; un **gizmo** (3 fleches rouge/
+  verte/bleue = X/Y/Z) apparait alors sur l'objet ; **cliquer-tirer** une
+  fleche deplace l'objet le long de cet axe (intersection rayon/plan,
+  la meme technique que les vrais editeurs 3D).
+- Vérifié par test automatisé (simulation de clics/glisser via xdotool +
+  logs de debug) : la position de l'objet suit bien la souris pendant le
+  drag.
+
 ## Rendu 3D et caméra libre
 
 - `Core/Math.h` — Vec3/Mat4 minimalistes (perspective, lookAt, translate,

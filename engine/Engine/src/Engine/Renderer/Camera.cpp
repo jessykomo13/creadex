@@ -21,6 +21,24 @@ namespace WEngine {
         return Vec3::Cross(Forward(), Vec3(0.0f, 1.0f, 0.0f)).Normalized();
     }
 
+    Vec3 Camera::Up() const {
+        return Vec3::Cross(Right(), Forward()).Normalized();
+    }
+
+    Ray Camera::ScreenPointToRay(float mouseX, float mouseY, float windowWidth, float windowHeight, float fovYRadians) const {
+        float ndcX = (2.0f * mouseX / windowWidth) - 1.0f;
+        float ndcY = 1.0f - (2.0f * mouseY / windowHeight);
+        float aspect = windowWidth / windowHeight;
+        float tanHalfFov = std::tan(fovYRadians * 0.5f);
+
+        float camX = ndcX * tanHalfFov * aspect;
+        float camY = ndcY * tanHalfFov;
+
+        Vec3 fwd = Forward(), right = Right(), up = Up();
+        Vec3 dir = (fwd + right * camX + up * camY).Normalized();
+        return Ray{ Position, dir };
+    }
+
     void Camera::OnUpdate(Timestep ts) {
         auto [mx, my] = Input::GetMousePosition();
 

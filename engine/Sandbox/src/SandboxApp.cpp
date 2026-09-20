@@ -3,6 +3,8 @@
 #include <memory>
 #include <string>
 
+#include <GLFW/glfw3.h>
+
 static const char* VERTEX_SRC = R"(
 #version 330 core
 layout(location = 0) in vec3 a_Position;
@@ -36,11 +38,19 @@ struct SceneObject {
     WEngine::Vec3 position;
     WEngine::Vec3 tint{ 1.0f, 1.0f, 1.0f };
     float rotationSpeed = 0.0f;
+    float pickRadius = 0.9f;
 };
 
-// Scene 3D + editeur : viewport libre (camera Unreal-like) avec, par-dessus,
-// des panneaux ImGui dockables (Outliner, Inspecteur, Stats) qu'on peut
-// deplacer et arrimer n'importe ou dans la fenetre.
+static const WEngine::Vec3 AXIS_X(1.0f, 0.0f, 0.0f);
+static const WEngine::Vec3 AXIS_Y(0.0f, 1.0f, 0.0f);
+static const WEngine::Vec3 AXIS_Z(0.0f, 0.0f, 1.0f);
+static const float GIZMO_LEN = 1.4f;
+static const float GIZMO_HANDLE_RADIUS = 0.4f;
+
+// Scene 3D + editeur : viewport libre (camera Unreal-like), selection des
+// objets au clic gauche dans la scene (en plus de l'Outliner), et un gizmo
+// de deplacement (fleches X/Y/Z) qu'on peut tirer pour bouger l'objet
+// selectionne, comme dans Unreal/Unity.
 class Scene3DLayer : public WEngine::Layer {
 public:
     Scene3DLayer() : Layer("Scene3D") {
@@ -56,9 +66,14 @@ public:
     }
 
     void OnUpdate(WEngine::Timestep ts) override {
-        if (!ImGui::GetIO().WantCaptureMouse) {
+        bool uiHasMouse = ImGui::GetIO().WantCaptureMouse;
+
+        if (!uiHasMouse) {
             m_Camera.OnUpdate(ts);
         }
+
+        UpdatePickingAndGizmo(uiHasMouse);
+
         m_Time += ts.GetSeconds();
         m_LastFrameTime = ts.GetSeconds();
 
@@ -67,7 +82,7 @@ public:
 
         auto& window = WEngine::Application::Get().GetWindow();
         float aspect = (float)window.GetWidth() / (float)window.GetHeight();
-        WEngine::Mat4 proj = WEngine::Mat4::Perspective(45.0f * 3.14159265f / 180.0f, aspect, 0.1f, 100.0f);
+        WEngine::Mat4 proj = WEngine::Mat4::Perspective(FOV_Y, aspect, 0.1f, 100.0f);
         WEngine::Mat4 viewProj = WEngine::Mat4::Multiply(proj, m_Camera.GetViewMatrix());
 
         m_Shader->Bind();
@@ -77,15 +92,115 @@ public:
         m_Shader->SetMat4("u_Model", WEngine::Mat4::Identity().m);
         m_Grid->Draw();
 
-        for (auto& obj : m_Objects) {
+        for (int i = 0; i < (int)m_Objects.size(); i++) {
+            auto& obj = m_Objects[i];
             WEngine::Mat4 model = WEngine::Mat4::Multiply(
                 WEngine::Mat4::Translate(obj.position),
                 WEngine::Mat4::RotateY(m_Time * obj.rotationSpeed)
             );
-            m_Shader->SetFloat3("u_Tint", obj.tint.x, obj.tint.y, obj.tint.z);
+            WEngine::Vec3 tint = obj.tint;
+            if (i == m_Selected) tint = tint * 1.25f;
+            m_Shader->SetFloat3("u_Tint", tint.x, tint.y, tint.z);
             m_Shader->SetMat4("u_Model", model.m);
             m_Cube->Draw();
         }
+
+        if (m_Selected >= 0 && m_Selected < (int)m_Objects.size()) {
+            DrawGizmo(m_Objects[m_Selected].position);
+        }
+    }
+
+    void DrawGizmo(const WEngine::Vec3& pos) {
+        DrawAxisArrow(pos, AXIS_X, 0.95f, 0.25f, 0.25f);
+        DrawAxisArrow(pos, AXIS_Y, 0.25f, 0.95f, 0.3f);
+        DrawAxisArrow(pos, AXIS_Z, 0.3f, 0.45f, 0.95f);
+    }
+
+    void DrawAxisArrow(const WEngine::Vec3& origin, const WEngine::Vec3& axis, float r, float g, float b) {
+        float shaftLen = GIZMO_LEN * 0.7f, thick = 0.06f, headLen = GIZMO_LEN * 0.3f, headThick = 0.16f;
+
+        WEngine::Vec3 shaftScale(
+            axis.x != 0.0f ? shaftLen : thick,
+            axis.y != 0.0f ? shaftLen : thick,
+            axis.z != 0.0f ? shaftLen : thick);
+        WEngine::Vec3 shaftPos = origin + axis * (shaftLen * 0.5f);
+        WEngine::Mat4 shaftModel = WEngine::Mat4::Multiply(WEngine::Mat4::Translate(shaftPos), WEngine::Mat4::Scale(shaftScale));
+        m_Shader->SetFloat3("u_Tint", r, g, b);
+        m_Shader->SetMat4("u_Model", shaftModel.m);
+        m_Cube->Draw();
+
+        WEngine::Vec3 headScale(
+            axis.x != 0.0f ? headLen : headThick,
+            axis.y != 0.0f ? headLen : headThick,
+            axis.z != 0.0f ? headLen : headThick);
+        WEngine::Vec3 headPos = origin + axis * (shaftLen + headLen * 0.5f);
+        WEngine::Mat4 headModel = WEngine::Mat4::Multiply(WEngine::Mat4::Translate(headPos), WEngine::Mat4::Scale(headScale));
+        m_Shader->SetMat4("u_Model", headModel.m);
+        m_Cube->Draw();
+    }
+
+    void UpdatePickingAndGizmo(bool uiHasMouse) {
+        auto& window = WEngine::Application::Get().GetWindow();
+        auto [mx, my] = WEngine::Input::GetMousePosition();
+        WEngine::Ray ray = m_Camera.ScreenPointToRay(mx, my, (float)window.GetWidth(), (float)window.GetHeight(), FOV_Y);
+
+        bool leftDown = !uiHasMouse && WEngine::Input::IsMouseButtonPressed(GLFW_MOUSE_BUTTON_LEFT);
+        bool justPressed = leftDown && !m_LeftWasDown;
+        m_LeftWasDown = leftDown;
+
+        if (m_DraggingAxis >= 0) {
+            if (!leftDown) {
+                m_DraggingAxis = -1;
+            } else {
+                WEngine::Vec3 axis = m_DraggingAxis == 0 ? AXIS_X : (m_DraggingAxis == 1 ? AXIS_Y : AXIS_Z);
+                WEngine::Vec3 camFwd = m_Camera.Forward();
+                WEngine::Vec3 planeNormal = WEngine::Vec3::Cross(axis, WEngine::Vec3::Cross(camFwd, axis)).Normalized();
+                WEngine::Vec3 hit;
+                if (WEngine::RayPlaneIntersect(ray, m_DragOriginPos, planeNormal, hit)) {
+                    float t = WEngine::Vec3::Dot(hit - m_DragOriginPos, axis);
+                    m_Objects[m_Selected].position = m_DragOriginPos + axis * (t - m_DragStartOffset);
+                }
+            }
+            return;
+        }
+
+        if (!justPressed) return;
+
+
+        if (m_Selected >= 0 && m_Selected < (int)m_Objects.size()) {
+            const WEngine::Vec3& objPos = m_Objects[m_Selected].position;
+            struct { int axis; WEngine::Vec3 dir; } handles[3] = { {0, AXIS_X}, {1, AXIS_Y}, {2, AXIS_Z} };
+            float bestT = 1e9f; int bestAxis = -1;
+            for (auto& h : handles) {
+                WEngine::Vec3 handleCenter = objPos + h.dir * (GIZMO_LEN * 0.75f);
+                float t;
+                if (WEngine::RaySphereIntersect(ray, handleCenter, GIZMO_HANDLE_RADIUS, t) && t < bestT) {
+                    bestT = t; bestAxis = h.axis;
+                }
+            }
+            if (bestAxis >= 0) {
+                m_DraggingAxis = bestAxis;
+                m_DragOriginPos = objPos;
+                WEngine::Vec3 axis = bestAxis == 0 ? AXIS_X : (bestAxis == 1 ? AXIS_Y : AXIS_Z);
+                WEngine::Vec3 camFwd = m_Camera.Forward();
+                WEngine::Vec3 planeNormal = WEngine::Vec3::Cross(axis, WEngine::Vec3::Cross(camFwd, axis)).Normalized();
+                WEngine::Vec3 hit;
+                m_DragStartOffset = 0.0f;
+                if (WEngine::RayPlaneIntersect(ray, m_DragOriginPos, planeNormal, hit)) {
+                    m_DragStartOffset = WEngine::Vec3::Dot(hit - m_DragOriginPos, axis);
+                }
+                return;
+            }
+        }
+
+        float bestT = 1e9f; int bestObj = -1;
+        for (int i = 0; i < (int)m_Objects.size(); i++) {
+            float t;
+            if (WEngine::RaySphereIntersect(ray, m_Objects[i].position, m_Objects[i].pickRadius, t) && t < bestT) {
+                bestT = t; bestObj = i;
+            }
+        }
+        m_Selected = bestObj;
     }
 
     void OnImGuiRender() override {
@@ -120,7 +235,7 @@ public:
                 m_Selected = -1;
             }
         } else {
-            ImGui::TextDisabled("Selectionne un objet dans l'Outliner.");
+            ImGui::TextDisabled("Selectionne un objet dans l'Outliner ou clique dessus dans la scene.");
         }
         ImGui::End();
 
@@ -128,8 +243,9 @@ public:
         ImGui::Text("FPS: %.0f", m_LastFrameTime > 0.0f ? 1.0f / m_LastFrameTime : 0.0f);
         ImGui::Text("Camera pos: %.1f, %.1f, %.1f", m_Camera.Position.x, m_Camera.Position.y, m_Camera.Position.z);
         ImGui::Separator();
-        ImGui::TextWrapped("Clic droit + souris : regarder autour");
-        ImGui::TextWrapped("WASD : se deplacer, Q/E : monter/descendre, Shift : plus vite");
+        ImGui::TextWrapped("Clic gauche sur un objet : le selectionner");
+        ImGui::TextWrapped("Clic gauche + tirer une fleche du gizmo : le deplacer sur cet axe");
+        ImGui::TextWrapped("Clic droit + souris : regarder autour, WASD : se deplacer, Q/E : monter/descendre, Shift : plus vite");
         ImGui::TextWrapped("Ces panneaux se deplacent et s'arriment ou tu veux (tire un titre).");
         ImGui::End();
     }
@@ -145,6 +261,8 @@ public:
     }
 
 private:
+    static constexpr float FOV_Y = 45.0f * 3.14159265f / 180.0f;
+
     std::unique_ptr<WEngine::Shader> m_Shader;
     std::unique_ptr<WEngine::Mesh> m_Cube;
     std::unique_ptr<WEngine::Mesh> m_Grid;
@@ -154,6 +272,11 @@ private:
     WEngine::Camera m_Camera;
     float m_Time = 0.0f;
     float m_LastFrameTime = 0.0f;
+
+    bool m_LeftWasDown = false;
+    int m_DraggingAxis = -1;
+    WEngine::Vec3 m_DragOriginPos;
+    float m_DragStartOffset = 0.0f;
 };
 
 class SandboxApp : public WEngine::Application {

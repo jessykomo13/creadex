@@ -21,6 +21,11 @@ namespace WEngine {
 
         Vec3 Forward() const;
         Vec3 Right() const;
+        Vec3 Up() const;
+
+        // Rayon partant de la camera a travers un pixel ecran (mouseX/mouseY en pixels,
+        // origine en haut-gauche), pour le picking d'objets dans la scene.
+        Ray ScreenPointToRay(float mouseX, float mouseY, float windowWidth, float windowHeight, float fovYRadians) const;
 
     private:
         bool m_FirstLook = true;
