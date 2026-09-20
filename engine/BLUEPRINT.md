@@ -55,6 +55,26 @@ engine/
   `Engine/vendor/glad/`, comme `glad.lib` sur la capture d'écran.
 - **OpenGL** — fourni par le système (`libGL`/pilote GPU).
 
+## Interface d'éditeur (panneaux dockables)
+
+- Intègre **Dear ImGui** (branche `docking`) via `Core/ImGuiLayer.h/.cpp` :
+  une couche transverse poussée automatiquement par `Application`, qui crée
+  un dockspace plein écran par-dessus le viewport 3D (le rendu reste visible
+  derrière grâce à `ImGuiDockNodeFlags_PassthruCentralNode`).
+- `Layer::OnImGuiRender()` est le point d'extension : n'importe quelle
+  couche peut ouvrir ses propres fenêtres ImGui, qui héritent
+  automatiquement du dockspace (déplaçables, arrimables où l'utilisateur
+  veut, comme dans Unreal/Unity).
+- Le Sandbox illustre ça avec trois panneaux :
+  - **Outliner** — liste les objets de la scène, sélection au clic, bouton
+    pour ajouter un cube devant la caméra.
+  - **Inspecteur** — édite l'objet sélectionné en direct (position,
+    couleur, vitesse de rotation), avec suppression.
+  - **Stats** — FPS, position caméra, rappel des contrôles.
+- Le clic sur un panneau ImGui n'est plus intercepté par la caméra
+  (vérifié via `ImGui::GetIO().WantCaptureMouse` avant de mettre à jour
+  `Camera::OnUpdate`).
+
 ## Rendu 3D et caméra libre
 
 - `Core/Math.h` — Vec3/Mat4 minimalistes (perspective, lookAt, translate,

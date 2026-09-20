@@ -7,6 +7,7 @@
 #include "LayerStack.h"
 #include "Event.h"
 #include "Timestep.h"
+#include "ImGuiLayer.h"
 
 namespace WEngine {
 
@@ -32,6 +33,7 @@ namespace WEngine {
     private:
         std::unique_ptr<Window> m_Window;
         LayerStack m_LayerStack;
+        ImGuiLayer* m_ImGuiLayer = nullptr;
         bool m_Running = true;
         bool m_Minimized = false;
         float m_LastFrameTime = 0.0f;

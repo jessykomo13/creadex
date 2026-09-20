@@ -16,6 +16,8 @@
 #include "Engine/Renderer/Mesh.h"
 #include "Engine/Renderer/Camera.h"
 
+#include <imgui.h>
+
 // --- Entry point ------------------------------------------------------
 // Defini ici pour que chaque application client n'ait qu'a implementer
 // WEngine::CreateApplication() et rien d'autre.

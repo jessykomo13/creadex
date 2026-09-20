@@ -17,6 +17,9 @@ namespace WEngine {
 
         Input::Init(m_Window.get());
         Renderer::Init();
+
+        m_ImGuiLayer = new ImGuiLayer();
+        PushOverlay(m_ImGuiLayer);
     }
 
     Application::~Application() {
@@ -76,6 +79,12 @@ namespace WEngine {
                 for (Layer* layer : m_LayerStack) {
                     layer->OnUpdate(timestep);
                 }
+
+                m_ImGuiLayer->Begin();
+                for (Layer* layer : m_LayerStack) {
+                    layer->OnImGuiRender();
+                }
+                m_ImGuiLayer->End();
             }
 
             m_Window->OnUpdate();

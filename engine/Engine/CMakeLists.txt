@@ -14,8 +14,17 @@ add_library(Engine STATIC
     src/Engine/Core/Input.h
     src/Engine/Core/Input.cpp
     src/Engine/Core/Event.h
+    src/Engine/Core/ImGuiLayer.h
+    src/Engine/Core/ImGuiLayer.cpp
 
     src/Engine/Core/Math.h
+
+    ${imgui_SOURCE_DIR}/imgui.cpp
+    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_SOURCE_DIR}/imgui_tables.cpp
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
 
     src/Engine/Renderer/Renderer.h
     src/Engine/Renderer/Renderer.cpp
@@ -34,7 +43,12 @@ target_include_directories(Engine
         ${CMAKE_CURRENT_SOURCE_DIR}/src
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/vendor/glad/include
+    PUBLIC
+        ${imgui_SOURCE_DIR}
+        ${imgui_SOURCE_DIR}/backends
 )
+
+target_compile_definitions(Engine PUBLIC IMGUI_IMPL_OPENGL_LOADER_GLAD)
 
 target_link_libraries(Engine PUBLIC glfw)
 
