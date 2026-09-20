@@ -7,6 +7,7 @@
 #include <cmath>
 #include <filesystem>
 #include <cctype>
+#include <algorithm>
 
 #include <GLFW/glfw3.h>
 
@@ -78,18 +79,24 @@ void main() {
 }
 )";
 
-static const char* DEFAULT_SCRIPT_TEMPLATE =
-"// Logique de \"%s\"\n"
-"// Ceci n'est pas encore execute automatiquement : c'est ta zone pour\n"
-"// preparer/noter le comportement de cet objet (collisions, pieges, vie...).\n"
-"// La prochaine etape sera de rendre ce script reellement executable.\n"
-"\n"
-"on_collision(joueur):\n"
-"    // exemple : piege qui enleve une vie et repousse le joueur\n"
-"    joueur.vie -= 1\n"
-"    joueur.velocite.y = 8.0\n"
-"    if joueur.vie <= 0:\n"
-"        redemarrer_niveau()\n";
+// Blueprint visuel : une chaine de blocs (pas de lignes de code) qu'on
+// glisse dans un canvas, comme les evenements/actions d'Unreal. Chaque
+// objet a sa propre liste de blocs ; l'ordre de la liste = ordre
+// d'execution (pas encore execute automatiquement pendant le jeu, mais
+// c'est bien un editeur visuel, plus du texte).
+struct BlueprintNode {
+    int type = 0;
+    ImVec2 pos{ 0.0f, 0.0f };
+};
+
+struct NodeTypeInfo { const char* label; const char* shortLabel; ImU32 color; };
+static const NodeTypeInfo NODE_TYPES[] = {
+    { "Evenement : Collision avec le Joueur", "Collision",  IM_COL32(150, 100, 220, 255) },
+    { "Action : -1 Vie",                       "-1 Vie",     IM_COL32(210, 90, 90, 255) },
+    { "Action : Repousser le joueur",          "Repousser",  IM_COL32(230, 150, 60, 255) },
+    { "Condition : Vie <= 0 ?",                "Vie<=0?",    IM_COL32(230, 210, 60, 255) },
+    { "Action : Redemarrer le niveau",         "Redemarrer", IM_COL32(80, 140, 230, 255) },
+};
 
 static const char* SHAPE_NAMES[] = { "Cube", "Sphere", "Cylindre", "Camera", "Texte" };
 enum ShapeType { Shape_Cube = 0, Shape_Sphere = 1, Shape_Cylinder = 2, Shape_Camera = 3, Shape_Text = 4 };
@@ -100,22 +107,13 @@ struct SceneObject {
     WEngine::Vec3 tint{ 1.0f, 1.0f, 1.0f };
     float rotationSpeed = 0.0f;
     float pickRadius = 0.9f;
-    std::string script;
+    std::vector<BlueprintNode> blueprint;
     int shape = Shape_Cube;
     WEngine::Vec3 rotationEuler{ 0.0f, 0.0f, 0.0f }; // degres ; pour une Camera : x=pitch, y=yaw
     WEngine::Vec3 scale{ 1.0f, 1.0f, 1.0f };
     std::string texturePath; // vide = pas de texture, couleur unie
     std::string text = "Texte"; // utilise seulement si shape == Shape_Text
 };
-
-static int ScriptEditCallback(ImGuiInputTextCallbackData* data) {
-    if (data->EventFlag == ImGuiInputTextFlags_CallbackResize) {
-        std::string* str = (std::string*)data->UserData;
-        str->resize(data->BufTextLen);
-        data->Buf = (char*)str->c_str();
-    }
-    return 0;
-}
 
 static int TextEditCallback(ImGuiInputTextCallbackData* data) {
     if (data->EventFlag == ImGuiInputTextFlags_CallbackResize) {
@@ -621,13 +619,12 @@ public:
             }
 
             ImGui::Separator();
-            if (ImGui::Button("</> Ouvrir le script (N)", ImVec2(-1, 0))) {
-                OpenScriptEditor(m_Selected);
+            if (ImGui::Button("Blueprint visuel (N)", ImVec2(-1, 0))) {
+                OpenBlueprintEditor(m_Selected);
             }
             ImGui::Separator();
-            if (ImGui::Button("Supprimer", ImVec2(-1, 0))) {
-                m_Objects.erase(m_Objects.begin() + m_Selected);
-                m_Selected = -1;
+            if (ImGui::Button("Supprimer (Suppr)", ImVec2(-1, 0))) {
+                DeleteSelected();
             }
         } else {
             ImGui::TextDisabled("Selectionne un objet dans l'Outliner ou clique dessus dans la scene.");
@@ -657,35 +654,32 @@ public:
         ImGui::End();
 
         if (m_ShowScriptEditor && m_ScriptTarget >= 0 && m_ScriptTarget < (int)m_Objects.size()) {
-            SceneObject& obj = m_Objects[m_ScriptTarget];
-            std::string title = "</> Script - " + obj.name;
-            ImGui::SetNextWindowSize(ImVec2(520, 380), ImGuiCond_FirstUseEver);
-            if (ImGui::Begin(title.c_str(), &m_ShowScriptEditor)) {
-                ImGui::TextDisabled("Code de \"%s\" (pas encore execute automatiquement)", obj.name.c_str());
-                ImGui::Separator();
-                ImGui::InputTextMultiline(
-                    "##script", (char*)obj.script.c_str(), obj.script.capacity() + 1,
-                    ImVec2(-1, -1),
-                    ImGuiInputTextFlags_CallbackResize | ImGuiInputTextFlags_AllowTabInput,
-                    ScriptEditCallback, &obj.script);
-            }
-            ImGui::End();
+            DrawBlueprintEditor(m_Objects[m_ScriptTarget]);
         }
 
-        ImGui::Begin("Jeu");
-        ImGui::TextWrapped("Personnage jouable pre-fabrique (deplacement + saut + animation + camera 3e personne), code deja ecrit pour gagner du temps.");
-        bool wasOn = m_PlayerMode;
-        ImGui::Checkbox("Activer le personnage jouable", &m_PlayerMode);
-        if (m_PlayerMode && !wasOn) {
-            m_PlayerPos = m_Camera.Position + m_Camera.Forward() * 3.0f;
-            m_PlayerPos.y = 1.0f;
-            m_PlayerVelY = 0.0f;
-            m_PlayerGrounded = true;
+        ImGui::Begin("Jouer");
+        {
+            bool wasOn = m_PlayerMode;
+            ImVec4 col = m_PlayerMode ? ImVec4(0.75f, 0.2f, 0.2f, 1.0f) : ImVec4(0.2f, 0.65f, 0.25f, 1.0f);
+            ImGui::PushStyleColor(ImGuiCol_Button, col);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, col);
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, col);
+            if (ImGui::Button(m_PlayerMode ? "■  Arreter (F5)" : "▶  Lancer le jeu (F5)", ImVec2(-1, 48))) {
+                m_PlayerMode = !m_PlayerMode;
+            }
+            ImGui::PopStyleColor(3);
+            if (m_PlayerMode && !wasOn) {
+                m_PlayerPos = m_Camera.Position + m_Camera.Forward() * 3.0f;
+                m_PlayerPos.y = 1.0f;
+                m_PlayerVelY = 0.0f;
+                m_PlayerGrounded = true;
+            }
         }
+        ImGui::Separator();
         if (m_PlayerMode) {
             ImGui::TextWrapped("WASD : marcher, Espace : sauter, Clic droit + souris : orbiter la camera. Tous les objets de la scene servent de plateformes.");
         } else {
-            ImGui::TextDisabled("Desactive : tu gardes la camera libre d'editeur.");
+            ImGui::TextWrapped("Personnage jouable pre-fabrique (deplacement + saut + animation + camera 3e personne), code deja ecrit pour gagner du temps.");
         }
         ImGui::End();
 
@@ -695,6 +689,9 @@ public:
         ImGui::Separator();
         ImGui::TextWrapped("Clic gauche sur un objet : le selectionner");
         ImGui::TextWrapped("Clic gauche + tirer une fleche du gizmo : le deplacer sur cet axe");
+        ImGui::TextWrapped("Suppr : supprimer l'objet selectionne");
+        ImGui::TextWrapped("N : ouvrir son Blueprint visuel");
+        ImGui::TextWrapped("F5 ou panneau Jouer : lancer/arreter le jeu");
         ImGui::TextWrapped("Clic droit + souris : regarder autour, WASD : se deplacer, Q/E : monter/descendre, Shift : plus vite");
         ImGui::TextWrapped("Ces panneaux se deplacent et s'arriment ou tu veux (tire un titre).");
         ImGui::End();
@@ -718,26 +715,146 @@ public:
         if (event.GetEventType() == WEngine::EventType::KeyPressed) {
             auto& e = static_cast<WEngine::KeyPressedEvent&>(event);
             constexpr int KEY_ESCAPE = 256;
+            constexpr int KEY_DELETE = 261;
             constexpr int KEY_N = 78;
+            constexpr int KEY_F5 = 294;
+            bool typing = ImGui::GetIO().WantTextInput;
+
             if (e.GetKeyCode() == KEY_ESCAPE) {
                 WEngine::Application::Get().Close();
             }
-            if (e.GetKeyCode() == KEY_N && !e.IsRepeat() && !ImGui::GetIO().WantTextInput
+            if (e.GetKeyCode() == KEY_N && !e.IsRepeat() && !typing
                 && m_Selected >= 0 && m_Selected < (int)m_Objects.size()) {
-                OpenScriptEditor(m_Selected);
+                OpenBlueprintEditor(m_Selected);
+            }
+            if (e.GetKeyCode() == KEY_DELETE && !e.IsRepeat() && !typing) {
+                DeleteSelected();
+            }
+            if (e.GetKeyCode() == KEY_F5 && !e.IsRepeat()) {
+                m_PlayerMode = !m_PlayerMode;
+                if (m_PlayerMode) {
+                    m_PlayerPos = m_Camera.Position + m_Camera.Forward() * 3.0f;
+                    m_PlayerPos.y = 1.0f;
+                    m_PlayerVelY = 0.0f;
+                    m_PlayerGrounded = true;
+                }
             }
         }
     }
 
-    void OpenScriptEditor(int index) {
+    void DeleteSelected() {
+        if (m_Selected < 0 || m_Selected >= (int)m_Objects.size()) return;
+        m_Objects.erase(m_Objects.begin() + m_Selected);
+        m_Selected = -1;
+        m_ShowScriptEditor = false;
+    }
+
+    void OpenBlueprintEditor(int index) {
         SceneObject& obj = m_Objects[index];
-        if (obj.script.empty()) {
-            char buf[1024];
-            snprintf(buf, sizeof(buf), DEFAULT_SCRIPT_TEMPLATE, obj.name.c_str());
-            obj.script = buf;
+        if (obj.blueprint.empty()) {
+            for (int i = 0; i < IM_ARRAYSIZE(NODE_TYPES); i++) {
+                BlueprintNode n;
+                n.type = i;
+                n.pos = ImVec2(30.0f, 30.0f + (float)i * 96.0f);
+                obj.blueprint.push_back(n);
+            }
         }
         m_ScriptTarget = index;
         m_ShowScriptEditor = true;
+    }
+
+    // Editeur de logique visuel a base de blocs : glisser-deposer, pas de
+    // ligne de code. L'ordre des blocs dans la liste = ordre d'execution
+    // (represente par les fleches entre eux). Pas encore execute
+    // automatiquement pendant le jeu.
+    void DrawBlueprintEditor(SceneObject& obj) {
+        std::string title = "Blueprint - " + obj.name;
+        ImGui::SetNextWindowSize(ImVec2(600, 480), ImGuiCond_FirstUseEver);
+        if (!ImGui::Begin(title.c_str(), &m_ShowScriptEditor)) { ImGui::End(); return; }
+
+        ImGui::TextWrapped("Glisse les blocs pour organiser la logique. Ajoute-en avec les boutons ci-dessous.");
+        ImGui::Separator();
+
+        for (int t = 0; t < IM_ARRAYSIZE(NODE_TYPES); t++) {
+            if (t > 0) ImGui::SameLine();
+            ImGui::PushID(t);
+            std::string label = std::string("+ ") + NODE_TYPES[t].shortLabel;
+            if (ImGui::SmallButton(label.c_str())) {
+                BlueprintNode n;
+                n.type = t;
+                n.pos = ImVec2(30.0f, 30.0f + (float)obj.blueprint.size() * 40.0f);
+                obj.blueprint.push_back(n);
+            }
+            ImGui::PopID();
+        }
+        ImGui::Separator();
+
+        ImVec2 visibleSize = ImGui::GetContentRegionAvail();
+        if (visibleSize.x < 100.0f) visibleSize.x = 100.0f;
+        if (visibleSize.y < 100.0f) visibleSize.y = 100.0f;
+
+        ImGui::BeginChild("##bp_canvas_child", visibleSize, true, ImGuiWindowFlags_HorizontalScrollbar);
+
+        const ImVec2 nodeSizeForBounds(230.0f, 56.0f);
+        float contentH = 30.0f;
+        for (auto& n : obj.blueprint) contentH = std::max(contentH, n.pos.y + nodeSizeForBounds.y + 20.0f);
+        ImVec2 canvasSize = ImGui::GetContentRegionAvail();
+        if (canvasSize.y < contentH) canvasSize.y = contentH;
+
+        ImVec2 canvasPos = ImGui::GetCursorScreenPos();
+        ImGui::InvisibleButton("##bp_canvas_bg", canvasSize);
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->PushClipRect(canvasPos, ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y), true);
+        dl->AddRectFilled(canvasPos, ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y), IM_COL32(28, 28, 36, 255));
+        for (float gx = 0.0f; gx < canvasSize.x; gx += 24.0f)
+            for (float gy = 0.0f; gy < canvasSize.y; gy += 24.0f)
+                dl->AddCircleFilled(ImVec2(canvasPos.x + gx, canvasPos.y + gy), 1.0f, IM_COL32(70, 70, 85, 255));
+
+        const ImVec2 nodeSize(230.0f, 56.0f);
+
+        for (int i = 0; i + 1 < (int)obj.blueprint.size(); i++) {
+            ImVec2 a = { canvasPos.x + obj.blueprint[i].pos.x + nodeSize.x * 0.5f, canvasPos.y + obj.blueprint[i].pos.y + nodeSize.y };
+            ImVec2 b = { canvasPos.x + obj.blueprint[i + 1].pos.x + nodeSize.x * 0.5f, canvasPos.y + obj.blueprint[i + 1].pos.y };
+            dl->AddLine(a, b, IM_COL32(230, 230, 230, 210), 2.5f);
+            ImVec2 mid = { (a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f };
+            dl->AddTriangleFilled(ImVec2(mid.x - 5, mid.y - 5), ImVec2(mid.x + 5, mid.y - 5), ImVec2(mid.x, mid.y + 6), IM_COL32(230, 230, 230, 230));
+        }
+
+        int deleteIndex = -1;
+        for (int i = 0; i < (int)obj.blueprint.size(); i++) {
+            BlueprintNode& node = obj.blueprint[i];
+            if (node.pos.x > canvasSize.x - nodeSize.x) node.pos.x = std::max(0.0f, canvasSize.x - nodeSize.x);
+            if (node.pos.x < 0.0f) node.pos.x = 0.0f;
+            if (node.pos.y < 0.0f) node.pos.y = 0.0f;
+
+            ImVec2 boxMin = { canvasPos.x + node.pos.x, canvasPos.y + node.pos.y };
+            ImVec2 boxMax = { boxMin.x + nodeSize.x, boxMin.y + nodeSize.y };
+            const NodeTypeInfo& info = NODE_TYPES[node.type];
+
+            dl->AddRectFilled(boxMin, boxMax, info.color, 6.0f);
+            dl->AddRect(boxMin, boxMax, IM_COL32(0, 0, 0, 150), 6.0f, 0, 2.0f);
+            dl->AddText(ImVec2(boxMin.x + 10, boxMin.y + 18), IM_COL32(25, 25, 25, 255), info.label);
+
+            ImGui::PushID(i);
+            ImGui::SetCursorScreenPos(boxMin);
+            ImGui::InvisibleButton("##node", nodeSize);
+            if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+                ImVec2 delta = ImGui::GetIO().MouseDelta;
+                node.pos.x += delta.x;
+                node.pos.y += delta.y;
+            }
+            ImGui::SetCursorScreenPos(ImVec2(boxMax.x - 22.0f, boxMin.y + 2.0f));
+            if (ImGui::SmallButton("x")) deleteIndex = i;
+            ImGui::PopID();
+        }
+        dl->PopClipRect();
+        ImGui::SetCursorScreenPos(canvasPos);
+        ImGui::Dummy(canvasSize);
+        ImGui::EndChild();
+
+        if (deleteIndex >= 0) obj.blueprint.erase(obj.blueprint.begin() + deleteIndex);
+
+        ImGui::End();
     }
 
 private:
