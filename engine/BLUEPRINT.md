@@ -55,7 +55,20 @@ engine/
   `Engine/vendor/glad/`, comme `glad.lib` sur la capture d'écran.
 - **OpenGL** — fourni par le système (`libGL`/pilote GPU).
 
-## Build
+## Rendu 3D et caméra libre
+
+- `Core/Math.h` — Vec3/Mat4 minimalistes (perspective, lookAt, translate,
+  rotate) sans dépendance externe (pas de GLM).
+- `Renderer/Mesh.h/.cpp` — VAO/VBO/EBO, avec des primitives prêtes à
+  l'emploi : `Mesh::CreateCube()`, `Mesh::CreateGrid()`.
+- `Renderer/Camera.h/.cpp` — caméra libre façon **viewport Unreal** :
+  maintenir le **clic droit** + bouger la souris pour regarder autour,
+  **WASD** pour avancer/reculer/strafer, **Q/E** pour monter/descendre,
+  **Shift** pour accélérer.
+- `Sandbox/src/SandboxApp.cpp` — scène de démonstration : sol quadrillé +
+  cubes colorés qui tournent, rendus via un shader GLSL minimal (MVP).
+
+## Build (Linux, testé dans cet environnement)
 
 ```bash
 cmake -S engine -B engine/build -DCMAKE_BUILD_TYPE=Release
@@ -63,19 +76,45 @@ cmake --build engine/build -j
 ./engine/build/Sandbox/Sandbox
 ```
 
-Testé et validé dans cet environnement (Linux, X11) : la fenêtre s'ouvre,
-le contexte OpenGL s'initialise, la boucle de rendu tourne.
+La fenêtre s'ouvre, le contexte OpenGL s'initialise, la scène 3D (sol +
+cubes) s'affiche et la caméra libre répond au clavier/souris — vérifié par
+capture d'écran dans ce même environnement (rendu logiciel llvmpipe, un
+vrai GPU sera plus rapide mais le résultat est identique).
 
-Sous Windows/Visual Studio (comme dans la capture d'écran d'origine),
-CMake peut générer une solution `.sln` directement :
+## Build Windows + installeur (.exe)
+
+Le projet compile aussi en croisé depuis Linux avec **mingw-w64**, et
+génère un **installeur Windows (NSIS)** via CPack — testé et confirmé
+fonctionnel dans cet environnement :
+
+```bash
+cmake -S engine -B engine/build-win -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_TOOLCHAIN_FILE=engine/cmake/mingw-w64-toolchain.cmake
+cmake --build engine/build-win -j
+cd engine/build-win && cpack -G NSIS
+# -> WEngineSandbox-0.1.0-win64.exe (installeur autonome, lien statique)
+```
+
+Sous Windows natif avec Visual Studio (comme sur ta capture d'écran
+d'origine), on peut aussi générer directement une solution `.sln` :
 
 ```bash
 cmake -S engine -B engine/build -G "Visual Studio 17 2022"
 ```
+et ajouter le même bloc CPack/NSIS pour produire l'installeur depuis
+Visual Studio.
+
+**Limite connue** : l'installeur `.exe` a été généré et vérifié comme un
+binaire Windows PE32+ valide (compilation + link statiques réussis sans
+erreur), mais n'a pas pu être testé en exécution ici faute d'un
+environnement Windows réel (Wine, utilisé pour essayer, est cassé dans ce
+sandbox à cause d'une dépendance i386 manquante). À tester sur une vraie
+machine Windows pour confirmer le lancement.
 
 ## Prochaines étapes possibles
 
-- Renderer 2D (sprites/quads batché) ou 3D (mesh, caméra).
 - Système d'entités (ECS) pour les objets de jeu.
 - Chargement d'assets (textures, modèles, sons).
-- Couche d'UI immédiate (ex. Dear ImGui) pour un éditeur.
+- Couche d'UI immédiate (ex. Dear ImGui) pour un éditeur avec panneaux,
+  comme un vrai viewport d'édition.
+- Sélection/déplacement d'objets à la souris dans la scène 3D.

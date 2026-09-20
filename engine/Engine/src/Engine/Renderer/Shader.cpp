@@ -79,4 +79,12 @@ namespace WEngine {
         glUniform4f(GetUniformLocation(name), v0, v1, v2, v3);
     }
 
+    void Shader::SetFloat3(const std::string& name, float v0, float v1, float v2) {
+        glUniform3f(GetUniformLocation(name), v0, v1, v2);
+    }
+
+    void Shader::SetMat4(const std::string& name, const float* matrix) {
+        glUniformMatrix4fv(GetUniformLocation(name), 1, GL_FALSE, matrix);
+    }
+
 } // namespace WEngine

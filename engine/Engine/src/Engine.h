@@ -10,8 +10,11 @@
 #include "Engine/Core/Timestep.h"
 #include "Engine/Core/Event.h"
 
+#include "Engine/Core/Math.h"
 #include "Engine/Renderer/Renderer.h"
 #include "Engine/Renderer/Shader.h"
+#include "Engine/Renderer/Mesh.h"
+#include "Engine/Renderer/Camera.h"
 
 // --- Entry point ------------------------------------------------------
 // Defini ici pour que chaque application client n'ait qu'a implementer

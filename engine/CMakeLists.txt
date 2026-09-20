@@ -27,3 +27,22 @@ FetchContent_MakeAvailable(glfw)
 
 add_subdirectory(Engine)
 add_subdirectory(Sandbox)
+
+install(TARGETS Sandbox RUNTIME DESTINATION .)
+
+set(CPACK_PACKAGE_NAME "WEngineSandbox")
+set(CPACK_PACKAGE_VENDOR "WEngine")
+set(CPACK_PACKAGE_VERSION "0.1.0")
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "WEngine Sandbox")
+set(CPACK_PACKAGE_EXECUTABLES "Sandbox" "WEngine Sandbox")
+
+if(WIN32)
+    set(CPACK_GENERATOR "NSIS")
+    set(CPACK_NSIS_EXECUTABLES_DIRECTORY ".")
+    set(CPACK_NSIS_MODIFY_PATH OFF)
+    set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
+else()
+    set(CPACK_GENERATOR "TGZ")
+endif()
+
+include(CPack)

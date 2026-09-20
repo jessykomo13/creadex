@@ -15,10 +15,16 @@ add_library(Engine STATIC
     src/Engine/Core/Input.cpp
     src/Engine/Core/Event.h
 
+    src/Engine/Core/Math.h
+
     src/Engine/Renderer/Renderer.h
     src/Engine/Renderer/Renderer.cpp
     src/Engine/Renderer/Shader.h
     src/Engine/Renderer/Shader.cpp
+    src/Engine/Renderer/Mesh.h
+    src/Engine/Renderer/Mesh.cpp
+    src/Engine/Renderer/Camera.h
+    src/Engine/Renderer/Camera.cpp
 
     src/Engine.h
 )
