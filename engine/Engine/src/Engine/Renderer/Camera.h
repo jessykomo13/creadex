@@ -10,6 +10,10 @@ namespace WEngine {
     class Camera {
     public:
         void OnUpdate(Timestep ts);
+        // Met a jour uniquement l'orientation (clic droit + souris), sans deplacer
+        // la position : utile quand la position est pilotee autrement (ex. camera
+        // troisieme personne qui suit un personnage).
+        void OnUpdateLookOnly(Timestep ts);
         Mat4 GetViewMatrix() const;
 
         Vec3 Position{ 0.0f, 3.0f, 8.0f };

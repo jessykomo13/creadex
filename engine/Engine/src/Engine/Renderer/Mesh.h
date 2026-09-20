@@ -24,6 +24,8 @@ namespace WEngine {
 
         static Mesh* CreateCube();
         static Mesh* CreateGrid(int halfSize, float spacing);
+        static Mesh* CreateSphere(int rings = 16, int sectors = 24);
+        static Mesh* CreateCylinder(int sectors = 24);
 
     private:
         unsigned int m_VAO = 0, m_VBO = 0, m_EBO = 0;

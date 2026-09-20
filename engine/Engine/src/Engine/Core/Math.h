@@ -73,6 +73,22 @@ namespace WEngine {
             return r;
         }
 
+        static Mat4 RotateX(float radians) {
+            Mat4 r = Identity();
+            float c = std::cos(radians), s = std::sin(radians);
+            r.m[5] = c; r.m[9] = -s;
+            r.m[6] = s; r.m[10] = c;
+            return r;
+        }
+
+        static Mat4 RotateZ(float radians) {
+            Mat4 r = Identity();
+            float c = std::cos(radians), s = std::sin(radians);
+            r.m[0] = c;  r.m[4] = -s;
+            r.m[1] = s;  r.m[5] = c;
+            return r;
+        }
+
         static Mat4 Perspective(float fovYRadians, float aspect, float zNear, float zFar) {
             Mat4 r;
             float f = 1.0f / std::tan(fovYRadians / 2.0f);

@@ -39,7 +39,8 @@ namespace WEngine {
         return Ray{ Position, dir };
     }
 
-    void Camera::OnUpdate(Timestep ts) {
+    void Camera::OnUpdateLookOnly(Timestep ts) {
+        (void)ts;
         auto [mx, my] = Input::GetMousePosition();
 
         if (Input::IsMouseButtonPressed(GLFW_MOUSE_BUTTON_RIGHT)) {
@@ -57,6 +58,10 @@ namespace WEngine {
             m_FirstLook = true;
         }
         m_LastMouseX = mx; m_LastMouseY = my;
+    }
+
+    void Camera::OnUpdate(Timestep ts) {
+        OnUpdateLookOnly(ts);
 
         float speed = MoveSpeed * (Input::IsKeyPressed(GLFW_KEY_LEFT_SHIFT) ? FastMultiplier : 1.0f) * ts.GetSeconds();
         Vec3 fwd = Forward();

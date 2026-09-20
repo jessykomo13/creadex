@@ -1,6 +1,7 @@
 #include "Mesh.h"
 
 #include <glad/glad.h>
+#include <cmath>
 
 namespace WEngine {
 
@@ -80,6 +81,73 @@ namespace WEngine {
         Mesh* mesh = new Mesh(v, idx);
         mesh->SetDrawAsLines(true);
         return mesh;
+    }
+
+    // Sphere UV, rayon 0.5 (meme boite englobante unitaire que le cube),
+    // couleur de base neutre pour laisser le tint de l'objet dominer.
+    Mesh* Mesh::CreateSphere(int rings, int sectors) {
+        std::vector<Vertex> v;
+        std::vector<uint32_t> idx;
+        const float radius = 0.5f;
+        const float PI = 3.14159265f;
+
+        for (int ring = 0; ring <= rings; ring++) {
+            float theta = PI * (float)ring / (float)rings;
+            float y = std::cos(theta) * radius;
+            float ringRadius = std::sin(theta) * radius;
+            for (int sector = 0; sector <= sectors; sector++) {
+                float phi = 2.0f * PI * (float)sector / (float)sectors;
+                float x = ringRadius * std::cos(phi);
+                float z = ringRadius * std::sin(phi);
+                v.push_back({ x, y, z, 0.9f, 0.9f, 0.9f });
+            }
+        }
+        for (int ring = 0; ring < rings; ring++) {
+            for (int sector = 0; sector < sectors; sector++) {
+                uint32_t a = ring * (sectors + 1) + sector;
+                uint32_t b = a + sectors + 1;
+                idx.push_back(a); idx.push_back(b); idx.push_back(a + 1);
+                idx.push_back(a + 1); idx.push_back(b); idx.push_back(b + 1);
+            }
+        }
+        return new Mesh(v, idx);
+    }
+
+    // Cylindre plein (deux capuchons), rayon 0.5, hauteur 1 : meme boite
+    // englobante unitaire que le cube pour que l'echelle se comporte pareil.
+    Mesh* Mesh::CreateCylinder(int sectors) {
+        std::vector<Vertex> v;
+        std::vector<uint32_t> idx;
+        const float radius = 0.5f, halfHeight = 0.5f;
+        const float col = 0.9f;
+        const float PI = 3.14159265f;
+
+        uint32_t topCenter = (uint32_t)v.size();
+        v.push_back({ 0.0f, halfHeight, 0.0f, col, col, col });
+        uint32_t bottomCenter = (uint32_t)v.size();
+        v.push_back({ 0.0f, -halfHeight, 0.0f, col, col, col });
+
+        uint32_t topRingStart = (uint32_t)v.size();
+        for (int i = 0; i <= sectors; i++) {
+            float phi = 2.0f * PI * (float)i / (float)sectors;
+            v.push_back({ radius * std::cos(phi), halfHeight, radius * std::sin(phi), col, col, col });
+        }
+        uint32_t bottomRingStart = (uint32_t)v.size();
+        for (int i = 0; i <= sectors; i++) {
+            float phi = 2.0f * PI * (float)i / (float)sectors;
+            v.push_back({ radius * std::cos(phi), -halfHeight, radius * std::sin(phi), col, col, col });
+        }
+
+        for (int i = 0; i < sectors; i++) {
+            idx.push_back(topCenter); idx.push_back(topRingStart + i); idx.push_back(topRingStart + i + 1);
+            idx.push_back(bottomCenter); idx.push_back(bottomRingStart + i + 1); idx.push_back(bottomRingStart + i);
+
+            uint32_t t0 = topRingStart + i, t1 = topRingStart + i + 1;
+            uint32_t b0 = bottomRingStart + i, b1 = bottomRingStart + i + 1;
+            idx.push_back(t0); idx.push_back(b0); idx.push_back(t1);
+            idx.push_back(t1); idx.push_back(b0); idx.push_back(b1);
+        }
+        return new Mesh(v, idx);
     }
 
 } // namespace WEngine

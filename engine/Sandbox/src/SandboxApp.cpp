@@ -47,6 +47,9 @@ static const char* DEFAULT_SCRIPT_TEMPLATE =
 "    if joueur.vie <= 0:\n"
 "        redemarrer_niveau()\n";
 
+static const char* SHAPE_NAMES[] = { "Cube", "Sphere", "Cylindre" };
+enum ShapeType { Shape_Cube = 0, Shape_Sphere = 1, Shape_Cylinder = 2 };
+
 struct SceneObject {
     std::string name;
     WEngine::Vec3 position;
@@ -54,6 +57,9 @@ struct SceneObject {
     float rotationSpeed = 0.0f;
     float pickRadius = 0.9f;
     std::string script;
+    int shape = Shape_Cube;
+    WEngine::Vec3 rotationEuler{ 0.0f, 0.0f, 0.0f }; // degres, rotation manuelle
+    WEngine::Vec3 scale{ 1.0f, 1.0f, 1.0f };
 };
 
 static int ScriptEditCallback(ImGuiInputTextCallbackData* data) {
@@ -64,6 +70,8 @@ static int ScriptEditCallback(ImGuiInputTextCallbackData* data) {
     }
     return 0;
 }
+
+static constexpr float DEG2RAD = 3.14159265f / 180.0f;
 
 static const WEngine::Vec3 AXIS_X(1.0f, 0.0f, 0.0f);
 static const WEngine::Vec3 AXIS_Y(0.0f, 1.0f, 0.0f);
@@ -80,6 +88,8 @@ public:
     Scene3DLayer() : Layer("Scene3D") {
         m_Shader = std::make_unique<WEngine::Shader>(VERTEX_SRC, FRAGMENT_SRC);
         m_Cube.reset(WEngine::Mesh::CreateCube());
+        m_Sphere.reset(WEngine::Mesh::CreateSphere());
+        m_Cylinder.reset(WEngine::Mesh::CreateCylinder());
         m_Grid.reset(WEngine::Mesh::CreateGrid(10, 1.0f));
 
         m_Objects.push_back({ "Cube 1", {0.0f, 0.5f, 0.0f}, {0.85f,0.35f,0.35f}, 0.4f });
@@ -92,11 +102,14 @@ public:
     void OnUpdate(WEngine::Timestep ts) override {
         bool uiHasMouse = ImGui::GetIO().WantCaptureMouse;
 
-        if (!uiHasMouse) {
-            m_Camera.OnUpdate(ts);
+        if (m_PlayerMode) {
+            UpdatePlayer(ts, uiHasMouse);
+        } else {
+            if (!uiHasMouse) {
+                m_Camera.OnUpdate(ts);
+            }
+            UpdatePickingAndGizmo(uiHasMouse);
         }
-
-        UpdatePickingAndGizmo(uiHasMouse);
 
         m_Time += ts.GetSeconds();
         m_LastFrameTime = ts.GetSeconds();
@@ -118,20 +131,88 @@ public:
 
         for (int i = 0; i < (int)m_Objects.size(); i++) {
             auto& obj = m_Objects[i];
+            WEngine::Mat4 rot = WEngine::Mat4::Multiply(
+                WEngine::Mat4::RotateY(m_Time * obj.rotationSpeed + obj.rotationEuler.y * DEG2RAD),
+                WEngine::Mat4::Multiply(
+                    WEngine::Mat4::RotateX(obj.rotationEuler.x * DEG2RAD),
+                    WEngine::Mat4::RotateZ(obj.rotationEuler.z * DEG2RAD)));
             WEngine::Mat4 model = WEngine::Mat4::Multiply(
-                WEngine::Mat4::Translate(obj.position),
-                WEngine::Mat4::RotateY(m_Time * obj.rotationSpeed)
+                WEngine::Mat4::Multiply(WEngine::Mat4::Translate(obj.position), rot),
+                WEngine::Mat4::Scale(obj.scale)
             );
             WEngine::Vec3 tint = obj.tint;
             if (i == m_Selected) tint = tint * 1.25f;
             m_Shader->SetFloat3("u_Tint", tint.x, tint.y, tint.z);
             m_Shader->SetMat4("u_Model", model.m);
-            m_Cube->Draw();
+            MeshFor(obj.shape)->Draw();
         }
 
-        if (m_Selected >= 0 && m_Selected < (int)m_Objects.size()) {
+        if (!m_PlayerMode && m_Selected >= 0 && m_Selected < (int)m_Objects.size()) {
             DrawGizmo(m_Objects[m_Selected].position);
         }
+
+        if (m_PlayerMode) {
+            DrawPlayer();
+        }
+    }
+
+    WEngine::Mesh* MeshFor(int shape) {
+        if (shape == Shape_Sphere) return m_Sphere.get();
+        if (shape == Shape_Cylinder) return m_Cylinder.get();
+        return m_Cube.get();
+    }
+
+    void DrawPlayer() {
+        WEngine::Mat4 bodyModel = WEngine::Mat4::Multiply(
+            WEngine::Mat4::Translate(m_PlayerPos), WEngine::Mat4::Scale({ 0.6f, 1.2f, 0.6f }));
+        m_Shader->SetFloat3("u_Tint", 0.3f, 0.55f, 0.9f);
+        m_Shader->SetMat4("u_Model", bodyModel.m);
+        m_Cylinder->Draw();
+
+        WEngine::Vec3 headPos = m_PlayerPos + WEngine::Vec3(0.0f, 0.85f, 0.0f);
+        WEngine::Mat4 headModel = WEngine::Mat4::Multiply(
+            WEngine::Mat4::Translate(headPos), WEngine::Mat4::Scale({ 0.5f, 0.5f, 0.5f }));
+        m_Shader->SetFloat3("u_Tint", 0.95f, 0.8f, 0.65f);
+        m_Shader->SetMat4("u_Model", headModel.m);
+        m_Sphere->Draw();
+    }
+
+    void UpdatePlayer(WEngine::Timestep ts, bool uiHasMouse) {
+        if (!uiHasMouse) {
+            m_Camera.OnUpdateLookOnly(ts);
+        }
+
+        WEngine::Vec3 fwd = m_Camera.Forward(); fwd.y = 0.0f; fwd = fwd.Normalized();
+        WEngine::Vec3 right = m_Camera.Right(); right.y = 0.0f; right = right.Normalized();
+
+        WEngine::Vec3 move{ 0.0f, 0.0f, 0.0f };
+        if (!uiHasMouse) {
+            if (WEngine::Input::IsKeyPressed(GLFW_KEY_W)) move = move + fwd;
+            if (WEngine::Input::IsKeyPressed(GLFW_KEY_S)) move = move - fwd;
+            if (WEngine::Input::IsKeyPressed(GLFW_KEY_D)) move = move + right;
+            if (WEngine::Input::IsKeyPressed(GLFW_KEY_A)) move = move - right;
+        }
+        if (move.x != 0.0f || move.z != 0.0f) {
+            move = move.Normalized();
+            float speed = 5.0f * ts.GetSeconds();
+            m_PlayerPos = m_PlayerPos + move * speed;
+        }
+
+        constexpr float GRAVITY = 20.0f, GROUND_Y = 1.0f, JUMP_SPEED = 8.0f;
+        if (!uiHasMouse && m_PlayerGrounded && WEngine::Input::IsKeyPressed(GLFW_KEY_SPACE)) {
+            m_PlayerVelY = JUMP_SPEED;
+            m_PlayerGrounded = false;
+        }
+        m_PlayerVelY -= GRAVITY * ts.GetSeconds();
+        m_PlayerPos.y += m_PlayerVelY * ts.GetSeconds();
+        if (m_PlayerPos.y <= GROUND_Y) {
+            m_PlayerPos.y = GROUND_Y;
+            m_PlayerVelY = 0.0f;
+            m_PlayerGrounded = true;
+        }
+
+        WEngine::Vec3 camOffset = m_Camera.Forward() * -5.0f + WEngine::Vec3(0.0f, 2.0f, 0.0f);
+        m_Camera.Position = m_PlayerPos + camOffset;
     }
 
     void DrawGizmo(const WEngine::Vec3& pos) {
@@ -238,9 +319,16 @@ public:
             }
         }
         ImGui::Separator();
-        if (ImGui::Button("+ Ajouter un cube", ImVec2(-1, 0))) {
+        ImGui::Combo("Forme", &m_NewShape, SHAPE_NAMES, IM_ARRAYSIZE(SHAPE_NAMES));
+        if (ImGui::Button("+ Ajouter", ImVec2(-1, 0))) {
             WEngine::Vec3 spawnPos = m_Camera.Position + m_Camera.Forward() * 4.0f;
-            m_Objects.push_back({ "Cube " + std::to_string(++m_NextId), spawnPos, {0.8f,0.8f,0.8f}, 0.5f });
+            SceneObject obj;
+            obj.name = std::string(SHAPE_NAMES[m_NewShape]) + " " + std::to_string(++m_NextId);
+            obj.position = spawnPos;
+            obj.tint = { 0.8f, 0.8f, 0.8f };
+            obj.rotationSpeed = 0.5f;
+            obj.shape = m_NewShape;
+            m_Objects.push_back(obj);
             m_Selected = (int)m_Objects.size() - 1;
         }
         ImGui::End();
@@ -250,9 +338,12 @@ public:
             SceneObject& obj = m_Objects[m_Selected];
             ImGui::Text("%s", obj.name.c_str());
             ImGui::Separator();
+            ImGui::Combo("Forme", &obj.shape, SHAPE_NAMES, IM_ARRAYSIZE(SHAPE_NAMES));
             ImGui::DragFloat3("Position", &obj.position.x, 0.05f);
+            ImGui::DragFloat3("Rotation (deg)", &obj.rotationEuler.x, 0.5f);
+            ImGui::DragFloat3("Echelle", &obj.scale.x, 0.02f, 0.05f, 10.0f);
             ImGui::ColorEdit3("Couleur", &obj.tint.x);
-            ImGui::DragFloat("Vitesse rotation", &obj.rotationSpeed, 0.02f, 0.0f, 5.0f);
+            ImGui::DragFloat("Vitesse rotation auto", &obj.rotationSpeed, 0.02f, 0.0f, 5.0f);
             ImGui::Separator();
             if (ImGui::Button("</> Ouvrir le script (N)", ImVec2(-1, 0))) {
                 OpenScriptEditor(m_Selected);
@@ -282,6 +373,23 @@ public:
             }
             ImGui::End();
         }
+
+        ImGui::Begin("Jeu");
+        ImGui::TextWrapped("Personnage jouable pre-fabrique (deplacement + camera 3e personne), code deja ecrit pour gagner du temps.");
+        bool wasOn = m_PlayerMode;
+        ImGui::Checkbox("Activer le personnage jouable", &m_PlayerMode);
+        if (m_PlayerMode && !wasOn) {
+            m_PlayerPos = m_Camera.Position + m_Camera.Forward() * 3.0f;
+            m_PlayerPos.y = 1.0f;
+            m_PlayerVelY = 0.0f;
+            m_PlayerGrounded = true;
+        }
+        if (m_PlayerMode) {
+            ImGui::TextWrapped("WASD : marcher, Espace : sauter, Clic droit + souris : orbiter la camera.");
+        } else {
+            ImGui::TextDisabled("Desactive : tu gardes la camera libre d'editeur.");
+        }
+        ImGui::End();
 
         ImGui::Begin("Stats");
         ImGui::Text("FPS: %.0f", m_LastFrameTime > 0.0f ? 1.0f / m_LastFrameTime : 0.0f);
@@ -325,13 +433,21 @@ private:
 
     std::unique_ptr<WEngine::Shader> m_Shader;
     std::unique_ptr<WEngine::Mesh> m_Cube;
+    std::unique_ptr<WEngine::Mesh> m_Sphere;
+    std::unique_ptr<WEngine::Mesh> m_Cylinder;
     std::unique_ptr<WEngine::Mesh> m_Grid;
     std::vector<SceneObject> m_Objects;
     int m_Selected = -1;
     int m_NextId = 5;
+    int m_NewShape = Shape_Cube;
     WEngine::Camera m_Camera;
     float m_Time = 0.0f;
     float m_LastFrameTime = 0.0f;
+
+    bool m_PlayerMode = false;
+    WEngine::Vec3 m_PlayerPos{ 0.0f, 1.0f, 6.0f };
+    float m_PlayerVelY = 0.0f;
+    bool m_PlayerGrounded = true;
 
     bool m_LeftWasDown = false;
     int m_DraggingAxis = -1;
