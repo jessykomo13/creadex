@@ -15,6 +15,7 @@
 #include "Engine/Renderer/Shader.h"
 #include "Engine/Renderer/Mesh.h"
 #include "Engine/Renderer/Camera.h"
+#include "Engine/Renderer/Texture.h"
 
 #include <imgui.h>
 

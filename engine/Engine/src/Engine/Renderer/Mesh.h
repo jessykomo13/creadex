@@ -5,10 +5,12 @@
 
 namespace WEngine {
 
-    // Vertex simple : position (3) + couleur (3). Suffisant pour visualiser
-    // des volumes dans l'espace 3D sans texture.
+    // Vertex : position (3) + normale (3, pour l'eclairage) + UV (2, pour les
+    // textures) + couleur de base (3, utilisee quand il n'y a pas de texture).
     struct Vertex {
         float px, py, pz;
+        float nx, ny, nz;
+        float u, v;
         float r, g, b;
     };
 

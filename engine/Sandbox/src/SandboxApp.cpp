@@ -2,35 +2,79 @@
 #include <vector>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <cstdio>
+#include <cmath>
+#include <filesystem>
+#include <cctype>
 
 #include <GLFW/glfw3.h>
 
+namespace fs = std::filesystem;
+
+// --- Shaders ---------------------------------------------------------
+// Position + normale (eclairage) + UV (texture) + couleur de base.
+// u_Lit : desactive l'eclairage pour la grille/le gizmo (elements d'UI,
+// pas des objets de la scene). u_UseTexture : si vrai, la couleur vient
+// de u_Texture au lieu de la couleur du vertex.
 static const char* VERTEX_SRC = R"(
 #version 330 core
 layout(location = 0) in vec3 a_Position;
-layout(location = 1) in vec3 a_Color;
+layout(location = 1) in vec3 a_Normal;
+layout(location = 2) in vec2 a_UV;
+layout(location = 3) in vec3 a_Color;
 
 uniform mat4 u_ViewProj;
 uniform mat4 u_Model;
+uniform mat4 u_NormalMatrix;
 
 out vec3 v_Color;
+out vec3 v_Normal;
+out vec2 v_UV;
+out vec3 v_WorldPos;
 
 void main() {
     v_Color = a_Color;
-    gl_Position = u_ViewProj * u_Model * vec4(a_Position, 1.0);
+    v_UV = a_UV;
+    v_Normal = mat3(u_NormalMatrix) * a_Normal;
+    vec4 worldPos = u_Model * vec4(a_Position, 1.0);
+    v_WorldPos = worldPos.xyz;
+    gl_Position = u_ViewProj * worldPos;
 }
 )";
 
 static const char* FRAGMENT_SRC = R"(
 #version 330 core
 in vec3 v_Color;
+in vec3 v_Normal;
+in vec2 v_UV;
+in vec3 v_WorldPos;
 out vec4 FragColor;
 
 uniform vec3 u_Tint;
+uniform int u_Lit;
+uniform int u_UseTexture;
+uniform sampler2D u_Texture;
+uniform vec3 u_LightDir;
+uniform vec3 u_ViewPos;
 
 void main() {
-    FragColor = vec4(v_Color * u_Tint, 1.0);
+    vec3 baseColor = (u_UseTexture != 0) ? texture(u_Texture, v_UV).rgb : v_Color;
+    vec3 color = baseColor * u_Tint;
+
+    if (u_Lit != 0) {
+        vec3 N = normalize(v_Normal);
+        vec3 L = normalize(-u_LightDir);
+        float diff = max(dot(N, L), 0.0);
+        vec3 viewDir = normalize(u_ViewPos - v_WorldPos);
+        vec3 halfDir = normalize(L + viewDir);
+        float spec = pow(max(dot(N, halfDir), 0.0), 24.0);
+        float ambient = 0.38;
+        vec3 lit = color * (ambient + diff * 0.72) + vec3(1.0) * spec * 0.12;
+        FragColor = vec4(lit, 1.0);
+    } else {
+        FragColor = vec4(color, 1.0);
+    }
 }
 )";
 
@@ -47,8 +91,8 @@ static const char* DEFAULT_SCRIPT_TEMPLATE =
 "    if joueur.vie <= 0:\n"
 "        redemarrer_niveau()\n";
 
-static const char* SHAPE_NAMES[] = { "Cube", "Sphere", "Cylindre" };
-enum ShapeType { Shape_Cube = 0, Shape_Sphere = 1, Shape_Cylinder = 2 };
+static const char* SHAPE_NAMES[] = { "Cube", "Sphere", "Cylindre", "Camera", "Texte" };
+enum ShapeType { Shape_Cube = 0, Shape_Sphere = 1, Shape_Cylinder = 2, Shape_Camera = 3, Shape_Text = 4 };
 
 struct SceneObject {
     std::string name;
@@ -58,11 +102,22 @@ struct SceneObject {
     float pickRadius = 0.9f;
     std::string script;
     int shape = Shape_Cube;
-    WEngine::Vec3 rotationEuler{ 0.0f, 0.0f, 0.0f }; // degres, rotation manuelle
+    WEngine::Vec3 rotationEuler{ 0.0f, 0.0f, 0.0f }; // degres ; pour une Camera : x=pitch, y=yaw
     WEngine::Vec3 scale{ 1.0f, 1.0f, 1.0f };
+    std::string texturePath; // vide = pas de texture, couleur unie
+    std::string text = "Texte"; // utilise seulement si shape == Shape_Text
 };
 
 static int ScriptEditCallback(ImGuiInputTextCallbackData* data) {
+    if (data->EventFlag == ImGuiInputTextFlags_CallbackResize) {
+        std::string* str = (std::string*)data->UserData;
+        str->resize(data->BufTextLen);
+        data->Buf = (char*)str->c_str();
+    }
+    return 0;
+}
+
+static int TextEditCallback(ImGuiInputTextCallbackData* data) {
     if (data->EventFlag == ImGuiInputTextFlags_CallbackResize) {
         std::string* str = (std::string*)data->UserData;
         str->resize(data->BufTextLen);
@@ -79,10 +134,14 @@ static const WEngine::Vec3 AXIS_Z(0.0f, 0.0f, 1.0f);
 static const float GIZMO_LEN = 1.4f;
 static const float GIZMO_HANDLE_RADIUS = 0.4f;
 
+static float Clamp01(float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
+
 // Scene 3D + editeur : viewport libre (camera Unreal-like), selection des
-// objets au clic gauche dans la scene (en plus de l'Outliner), et un gizmo
-// de deplacement (fleches X/Y/Z) qu'on peut tirer pour bouger l'objet
-// selectionne, comme dans Unreal/Unity.
+// objets au clic gauche dans la scene (en plus de l'Outliner), un gizmo de
+// deplacement (fleches X/Y/Z), eclairage temps reel, textures depuis un
+// dossier "assets", des objets Camera/Texte en plus des formes, et un
+// personnage jouable optionnel qui peut sauter sur les plateformes de la
+// scene (n'importe quel objet sert de plateforme, comme dans un editeur).
 class Scene3DLayer : public WEngine::Layer {
 public:
     Scene3DLayer() : Layer("Scene3D") {
@@ -92,11 +151,42 @@ public:
         m_Cylinder.reset(WEngine::Mesh::CreateCylinder());
         m_Grid.reset(WEngine::Mesh::CreateGrid(10, 1.0f));
 
-        m_Objects.push_back({ "Cube 1", {0.0f, 0.5f, 0.0f}, {0.85f,0.35f,0.35f}, 0.4f });
-        m_Objects.push_back({ "Cube 2", {2.5f, 0.5f, -1.5f}, {0.35f,0.65f,0.9f}, 0.55f });
-        m_Objects.push_back({ "Cube 3", {-2.0f, 1.0f, 1.0f}, {0.4f,0.85f,0.55f}, 0.7f });
-        m_Objects.push_back({ "Cube 4", {1.0f, 1.5f, 3.0f}, {0.95f,0.75f,0.25f}, 0.85f });
-        m_Objects.push_back({ "Cube 5", {-3.0f, 0.5f, -2.5f}, {0.7f,0.5f,0.9f}, 1.0f });
+        m_Objects.push_back({ "Cube 1", {0.0f, 0.5f, 0.0f}, {0.85f,0.35f,0.35f} });
+        m_Objects.push_back({ "Cube 2", {2.5f, 0.5f, -1.5f}, {0.35f,0.65f,0.9f} });
+        m_Objects.push_back({ "Cube 3", {-2.0f, 1.0f, 1.0f}, {0.4f,0.85f,0.55f} });
+        m_Objects.push_back({ "Cube 4", {1.0f, 1.5f, 3.0f}, {0.95f,0.75f,0.25f} });
+        m_Objects.push_back({ "Cube 5", {-3.0f, 0.5f, -2.5f}, {0.7f,0.5f,0.9f} });
+
+        auto addPlatform = [&](const char* name, WEngine::Vec3 pos, WEngine::Vec3 scale) {
+            SceneObject p;
+            p.name = name;
+            p.position = pos;
+            p.scale = scale;
+            p.tint = { 0.55f, 0.53f, 0.5f };
+            m_Objects.push_back(p);
+        };
+        addPlatform("Plateforme 1", { 4.0f, 0.5f, -3.0f }, { 2.2f, 1.0f, 2.2f });
+        addPlatform("Plateforme 2", { 7.0f, 1.5f, -5.0f }, { 2.2f, 1.0f, 2.2f });
+        addPlatform("Plateforme 3", { 10.0f, 2.5f, -3.0f }, { 2.2f, 1.0f, 2.2f });
+        addPlatform("Plateforme 4", { 10.0f, 3.5f, 1.0f }, { 2.2f, 1.0f, 2.2f });
+        addPlatform("Plateforme 5", { 7.0f, 4.5f, 3.0f }, { 2.6f, 1.0f, 2.6f });
+
+        SceneObject camObj;
+        camObj.name = "Camera 1";
+        camObj.shape = Shape_Camera;
+        camObj.position = { -4.5f, 1.8f, 0.5f };
+        camObj.rotationEuler = { -8.0f, 20.0f, 0.0f };
+        m_Objects.push_back(camObj);
+
+        SceneObject textObj;
+        textObj.name = "Texte 1";
+        textObj.shape = Shape_Text;
+        textObj.text = "WEngine Demo";
+        textObj.position = { 0.0f, 3.2f, 0.0f };
+        textObj.tint = { 1.0f, 1.0f, 1.0f };
+        m_Objects.push_back(textObj);
+
+        RefreshTextureList();
     }
 
     void OnUpdate(WEngine::Timestep ts) override {
@@ -114,23 +204,34 @@ public:
         m_Time += ts.GetSeconds();
         m_LastFrameTime = ts.GetSeconds();
 
-        WEngine::Renderer::SetClearColor(0.06f, 0.07f, 0.10f, 1.0f);
+        WEngine::Renderer::SetClearColor(0.45f, 0.6f, 0.78f, 1.0f);
         WEngine::Renderer::Clear();
 
         auto& window = WEngine::Application::Get().GetWindow();
-        float aspect = (float)window.GetWidth() / (float)window.GetHeight();
-        WEngine::Mat4 proj = WEngine::Mat4::Perspective(FOV_Y, aspect, 0.1f, 100.0f);
-        WEngine::Mat4 viewProj = WEngine::Mat4::Multiply(proj, m_Camera.GetViewMatrix());
+        m_ViewportW = (float)window.GetWidth();
+        m_ViewportH = (float)window.GetHeight();
+        float aspect = m_ViewportW / m_ViewportH;
+        WEngine::Mat4 proj = WEngine::Mat4::Perspective(FOV_Y, aspect, 0.1f, 150.0f);
+        m_LastViewProj = WEngine::Mat4::Multiply(proj, m_Camera.GetViewMatrix());
 
         m_Shader->Bind();
-        m_Shader->SetMat4("u_ViewProj", viewProj.m);
+        m_Shader->SetMat4("u_ViewProj", m_LastViewProj.m);
+        m_Shader->SetFloat3("u_LightDir", -0.35f, -1.0f, -0.25f);
+        m_Shader->SetFloat3("u_ViewPos", m_Camera.Position.x, m_Camera.Position.y, m_Camera.Position.z);
+        m_Shader->SetInt("u_Texture", 0);
 
+        // Grille : non eclairee, couleur fixe.
+        m_Shader->SetInt("u_Lit", 0);
+        m_Shader->SetInt("u_UseTexture", 0);
         m_Shader->SetFloat3("u_Tint", 1.0f, 1.0f, 1.0f);
-        m_Shader->SetMat4("u_Model", WEngine::Mat4::Identity().m);
+        SetModel(WEngine::Mat4::Identity());
         m_Grid->Draw();
 
         for (int i = 0; i < (int)m_Objects.size(); i++) {
             auto& obj = m_Objects[i];
+            if (obj.shape == Shape_Text) continue; // rendu en overlay 2D (OnImGuiRender)
+            if (obj.shape == Shape_Camera) { DrawCameraMarker(obj, i == m_Selected); continue; }
+
             WEngine::Mat4 rot = WEngine::Mat4::Multiply(
                 WEngine::Mat4::RotateY(m_Time * obj.rotationSpeed + obj.rotationEuler.y * DEG2RAD),
                 WEngine::Mat4::Multiply(
@@ -141,13 +242,25 @@ public:
                 WEngine::Mat4::Scale(obj.scale)
             );
             WEngine::Vec3 tint = obj.tint;
-            if (i == m_Selected) tint = tint * 1.25f;
+            if (i == m_Selected) {
+                tint = { Clamp01(tint.x * 1.25f), Clamp01(tint.y * 1.25f), Clamp01(tint.z * 1.25f) };
+            }
+
+            WEngine::Texture* tex = obj.texturePath.empty() ? nullptr : GetTexture(obj.texturePath);
+            m_Shader->SetInt("u_Lit", 1);
+            if (tex) {
+                tex->Bind(0);
+                m_Shader->SetInt("u_UseTexture", 1);
+            } else {
+                m_Shader->SetInt("u_UseTexture", 0);
+            }
             m_Shader->SetFloat3("u_Tint", tint.x, tint.y, tint.z);
-            m_Shader->SetMat4("u_Model", model.m);
+            SetModel(model);
             MeshFor(obj.shape)->Draw();
         }
 
-        if (!m_PlayerMode && m_Selected >= 0 && m_Selected < (int)m_Objects.size()) {
+        if (!m_PlayerMode && m_Selected >= 0 && m_Selected < (int)m_Objects.size()
+            && m_Objects[m_Selected].shape != Shape_Text) {
             DrawGizmo(m_Objects[m_Selected].position);
         }
 
@@ -156,25 +269,91 @@ public:
         }
     }
 
+    void SetModel(const WEngine::Mat4& model) {
+        m_Shader->SetMat4("u_Model", model.m);
+        WEngine::Mat4 normalMat = model;
+        normalMat.m[12] = 0.0f; normalMat.m[13] = 0.0f; normalMat.m[14] = 0.0f;
+        m_Shader->SetMat4("u_NormalMatrix", normalMat.m);
+    }
+
     WEngine::Mesh* MeshFor(int shape) {
         if (shape == Shape_Sphere) return m_Sphere.get();
         if (shape == Shape_Cylinder) return m_Cylinder.get();
         return m_Cube.get();
     }
 
-    void DrawPlayer() {
-        WEngine::Mat4 bodyModel = WEngine::Mat4::Multiply(
-            WEngine::Mat4::Translate(m_PlayerPos), WEngine::Mat4::Scale({ 0.6f, 1.2f, 0.6f }));
-        m_Shader->SetFloat3("u_Tint", 0.3f, 0.55f, 0.9f);
-        m_Shader->SetMat4("u_Model", bodyModel.m);
-        m_Cylinder->Draw();
+    WEngine::Texture* GetTexture(const std::string& path) {
+        auto it = m_TextureCache.find(path);
+        if (it != m_TextureCache.end()) return it->second->IsValid() ? it->second.get() : nullptr;
+        auto tex = std::make_unique<WEngine::Texture>(path);
+        WEngine::Texture* ptr = tex->IsValid() ? tex.get() : nullptr;
+        m_TextureCache[path] = std::move(tex);
+        return ptr;
+    }
 
-        WEngine::Vec3 headPos = m_PlayerPos + WEngine::Vec3(0.0f, 0.85f, 0.0f);
-        WEngine::Mat4 headModel = WEngine::Mat4::Multiply(
-            WEngine::Mat4::Translate(headPos), WEngine::Mat4::Scale({ 0.5f, 0.5f, 0.5f }));
-        m_Shader->SetFloat3("u_Tint", 0.95f, 0.8f, 0.65f);
-        m_Shader->SetMat4("u_Model", headModel.m);
-        m_Sphere->Draw();
+    void RefreshTextureList() {
+        m_AvailableTextures.clear();
+        std::error_code ec;
+        fs::path dir = "assets";
+        if (!fs::exists(dir, ec)) fs::create_directories(dir, ec);
+        if (!fs::exists(dir, ec)) return;
+        for (auto& entry : fs::directory_iterator(dir, ec)) {
+            if (ec || !entry.is_regular_file()) continue;
+            std::string ext = entry.path().extension().string();
+            for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
+            if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp") {
+                m_AvailableTextures.push_back(entry.path().string());
+            }
+        }
+    }
+
+    void DrawCameraMarker(const SceneObject& obj, bool selected) {
+        WEngine::Mat4 base = WEngine::Mat4::Multiply(
+            WEngine::Mat4::Translate(obj.position), WEngine::Mat4::RotateY(obj.rotationEuler.y * DEG2RAD));
+        WEngine::Vec3 tint = selected ? WEngine::Vec3(1.0f, 0.95f, 0.4f) : WEngine::Vec3(0.2f, 0.2f, 0.25f);
+
+        m_Shader->SetInt("u_Lit", 0);
+        m_Shader->SetInt("u_UseTexture", 0);
+        m_Shader->SetFloat3("u_Tint", tint.x, tint.y, tint.z);
+
+        WEngine::Mat4 body = WEngine::Mat4::Multiply(base, WEngine::Mat4::Scale({ 0.5f, 0.35f, 0.35f }));
+        SetModel(body);
+        m_Cube->Draw();
+
+        WEngine::Mat4 lens = WEngine::Mat4::Multiply(base, WEngine::Mat4::Multiply(
+            WEngine::Mat4::Translate({ 0.0f, 0.0f, -0.35f }),
+            WEngine::Mat4::Multiply(WEngine::Mat4::RotateX(90.0f * DEG2RAD), WEngine::Mat4::Scale({ 0.22f, 0.3f, 0.22f }))));
+        SetModel(lens);
+        m_Cylinder->Draw();
+    }
+
+    bool WorldToScreen(const WEngine::Vec3& worldPos, ImVec2& outScreen) {
+        const float* m = m_LastViewProj.m;
+        float x = worldPos.x, y = worldPos.y, z = worldPos.z;
+        float clipX = m[0] * x + m[4] * y + m[8] * z + m[12];
+        float clipY = m[1] * x + m[5] * y + m[9] * z + m[13];
+        float clipW = m[3] * x + m[7] * y + m[11] * z + m[15];
+        if (clipW <= 0.0001f) return false;
+        float ndcX = clipX / clipW, ndcY = clipY / clipW;
+        outScreen.x = (ndcX * 0.5f + 0.5f) * m_ViewportW;
+        outScreen.y = (1.0f - (ndcY * 0.5f + 0.5f)) * m_ViewportH;
+        return true;
+    }
+
+    // ---- Personnage jouable : mouvement, saut, animation procedurale ----
+
+    float SurfaceHeightAt(float x, float z, float refY) {
+        float best = 0.0f; // sol de base (grille, y=0)
+        for (auto& obj : m_Objects) {
+            if (obj.shape == Shape_Camera || obj.shape == Shape_Text) continue;
+            float halfX = std::fabs(obj.scale.x) * 0.5f, halfZ = std::fabs(obj.scale.z) * 0.5f;
+            if (x >= obj.position.x - halfX && x <= obj.position.x + halfX &&
+                z >= obj.position.z - halfZ && z <= obj.position.z + halfZ) {
+                float topY = obj.position.y + obj.scale.y * 0.5f;
+                if (topY <= refY + 0.2f && topY > best) best = topY;
+            }
+        }
+        return best;
     }
 
     void UpdatePlayer(WEngine::Timestep ts, bool uiHasMouse) {
@@ -192,30 +371,97 @@ public:
             if (WEngine::Input::IsKeyPressed(GLFW_KEY_D)) move = move + right;
             if (WEngine::Input::IsKeyPressed(GLFW_KEY_A)) move = move - right;
         }
-        if (move.x != 0.0f || move.z != 0.0f) {
+        m_PlayerMoving = (move.x != 0.0f || move.z != 0.0f);
+        if (m_PlayerMoving) {
             move = move.Normalized();
             float speed = 5.0f * ts.GetSeconds();
             m_PlayerPos = m_PlayerPos + move * speed;
+            m_PlayerFacingYaw = std::atan2(move.x, move.z);
+            m_WalkCycle += ts.GetSeconds() * 10.0f;
         }
 
-        constexpr float GRAVITY = 20.0f, GROUND_Y = 1.0f, JUMP_SPEED = 8.0f;
+        constexpr float GRAVITY = 20.0f, JUMP_SPEED = 8.0f, PLAYER_HALF_HEIGHT = 1.0f;
+        bool wasGrounded = m_PlayerGrounded;
         if (!uiHasMouse && m_PlayerGrounded && WEngine::Input::IsKeyPressed(GLFW_KEY_SPACE)) {
             m_PlayerVelY = JUMP_SPEED;
             m_PlayerGrounded = false;
         }
         m_PlayerVelY -= GRAVITY * ts.GetSeconds();
+        float feetBefore = m_PlayerPos.y - PLAYER_HALF_HEIGHT;
         m_PlayerPos.y += m_PlayerVelY * ts.GetSeconds();
-        if (m_PlayerPos.y <= GROUND_Y) {
-            m_PlayerPos.y = GROUND_Y;
+        float feetAfter = m_PlayerPos.y - PLAYER_HALF_HEIGHT;
+        float ground = SurfaceHeightAt(m_PlayerPos.x, m_PlayerPos.z, feetBefore);
+        if (feetAfter <= ground) {
+            m_PlayerPos.y = ground + PLAYER_HALF_HEIGHT;
             m_PlayerVelY = 0.0f;
             m_PlayerGrounded = true;
+        } else {
+            m_PlayerGrounded = false;
+        }
+        if (!wasGrounded && m_PlayerGrounded) m_SquashTimer = 0.15f;
+        if (m_SquashTimer > 0.0f) {
+            m_SquashTimer -= ts.GetSeconds();
+            if (m_SquashTimer < 0.0f) m_SquashTimer = 0.0f;
         }
 
         WEngine::Vec3 camOffset = m_Camera.Forward() * -5.0f + WEngine::Vec3(0.0f, 2.0f, 0.0f);
         m_Camera.Position = m_PlayerPos + camOffset;
     }
 
+    void DrawPart(const WEngine::Mat4& base, WEngine::Vec3 localPos, WEngine::Vec3 scale, WEngine::Vec3 tint, WEngine::Mesh* mesh) {
+        WEngine::Mat4 model = WEngine::Mat4::Multiply(base,
+            WEngine::Mat4::Multiply(WEngine::Mat4::Translate(localPos), WEngine::Mat4::Scale(scale)));
+        m_Shader->SetInt("u_Lit", 1);
+        m_Shader->SetInt("u_UseTexture", 0);
+        m_Shader->SetFloat3("u_Tint", tint.x, tint.y, tint.z);
+        SetModel(model);
+        mesh->Draw();
+    }
+
+    void DrawLimb(const WEngine::Mat4& base, WEngine::Vec3 pivotLocal, float angleRad, float length, float thickness, WEngine::Vec3 tint) {
+        WEngine::Mat4 model = WEngine::Mat4::Multiply(base,
+            WEngine::Mat4::Multiply(WEngine::Mat4::Translate(pivotLocal),
+            WEngine::Mat4::Multiply(WEngine::Mat4::RotateX(angleRad),
+            WEngine::Mat4::Multiply(WEngine::Mat4::Translate({ 0.0f, -length * 0.5f, 0.0f }), WEngine::Mat4::Scale({ thickness, length, thickness })))));
+        m_Shader->SetInt("u_Lit", 1);
+        m_Shader->SetInt("u_UseTexture", 0);
+        m_Shader->SetFloat3("u_Tint", tint.x, tint.y, tint.z);
+        SetModel(model);
+        m_Cylinder->Draw();
+    }
+
+    void DrawPlayer() {
+        WEngine::Mat4 base = WEngine::Mat4::Multiply(
+            WEngine::Mat4::Translate(m_PlayerPos), WEngine::Mat4::RotateY(m_PlayerFacingYaw));
+
+        float squashY = 1.0f, squashXZ = 1.0f;
+        if (m_SquashTimer > 0.0f) {
+            float t = m_SquashTimer / 0.15f;
+            squashY = 1.0f - 0.3f * t;
+            squashXZ = 1.0f + 0.2f * t;
+        } else if (!m_PlayerGrounded && m_PlayerVelY > 0.0f) {
+            squashY = 1.12f; squashXZ = 0.9f;
+        }
+
+        float legSwing = m_PlayerMoving ? std::sin(m_WalkCycle) * 0.6f : std::sin(m_Time * 1.5f) * 0.05f;
+        float armSwing = -legSwing;
+        float headBob = m_PlayerMoving ? std::fabs(std::sin(m_WalkCycle * 2.0f)) * 0.05f : std::sin(m_Time * 1.2f) * 0.02f;
+
+        WEngine::Vec3 skin(0.95f, 0.8f, 0.65f), shirt(0.3f, 0.55f, 0.9f), pants(0.25f, 0.3f, 0.4f);
+
+        DrawPart(base, { 0.0f, 0.0f, 0.0f }, { 0.5f * squashXZ, 0.95f * squashY, 0.5f * squashXZ }, shirt, m_Cylinder.get());
+        DrawPart(base, { 0.0f, 0.78f * squashY + headBob, 0.0f }, { 0.42f, 0.42f, 0.42f }, skin, m_Sphere.get());
+        DrawLimb(base, { 0.42f, 0.35f * squashY, 0.0f }, armSwing, 0.65f, 0.16f, shirt);
+        DrawLimb(base, { -0.42f, 0.35f * squashY, 0.0f }, -armSwing, 0.65f, 0.16f, shirt);
+        DrawLimb(base, { 0.2f, -0.45f * squashY, 0.0f }, -legSwing, 0.75f, 0.2f, pants);
+        DrawLimb(base, { -0.2f, -0.45f * squashY, 0.0f }, legSwing, 0.75f, 0.2f, pants);
+    }
+
+    // ---- Gizmo de deplacement ----
+
     void DrawGizmo(const WEngine::Vec3& pos) {
+        m_Shader->SetInt("u_Lit", 0);
+        m_Shader->SetInt("u_UseTexture", 0);
         DrawAxisArrow(pos, AXIS_X, 0.95f, 0.25f, 0.25f);
         DrawAxisArrow(pos, AXIS_Y, 0.25f, 0.95f, 0.3f);
         DrawAxisArrow(pos, AXIS_Z, 0.3f, 0.45f, 0.95f);
@@ -231,7 +477,7 @@ public:
         WEngine::Vec3 shaftPos = origin + axis * (shaftLen * 0.5f);
         WEngine::Mat4 shaftModel = WEngine::Mat4::Multiply(WEngine::Mat4::Translate(shaftPos), WEngine::Mat4::Scale(shaftScale));
         m_Shader->SetFloat3("u_Tint", r, g, b);
-        m_Shader->SetMat4("u_Model", shaftModel.m);
+        SetModel(shaftModel);
         m_Cube->Draw();
 
         WEngine::Vec3 headScale(
@@ -240,7 +486,7 @@ public:
             axis.z != 0.0f ? headLen : headThick);
         WEngine::Vec3 headPos = origin + axis * (shaftLen + headLen * 0.5f);
         WEngine::Mat4 headModel = WEngine::Mat4::Multiply(WEngine::Mat4::Translate(headPos), WEngine::Mat4::Scale(headScale));
-        m_Shader->SetMat4("u_Model", headModel.m);
+        SetModel(headModel);
         m_Cube->Draw();
     }
 
@@ -300,6 +546,7 @@ public:
 
         float bestT = 1e9f; int bestObj = -1;
         for (int i = 0; i < (int)m_Objects.size(); i++) {
+            if (m_Objects[i].shape == Shape_Text) continue;
             float t;
             if (WEngine::RaySphereIntersect(ray, m_Objects[i].position, m_Objects[i].pickRadius, t) && t < bestT) {
                 bestT = t; bestObj = i;
@@ -307,6 +554,8 @@ public:
         }
         m_Selected = bestObj;
     }
+
+    // ---- Interface ----
 
     void OnImGuiRender() override {
         ImGui::Begin("Outliner");
@@ -326,8 +575,8 @@ public:
             obj.name = std::string(SHAPE_NAMES[m_NewShape]) + " " + std::to_string(++m_NextId);
             obj.position = spawnPos;
             obj.tint = { 0.8f, 0.8f, 0.8f };
-            obj.rotationSpeed = 0.5f;
             obj.shape = m_NewShape;
+            if (m_NewShape == Shape_Text) obj.text = "Nouveau texte";
             m_Objects.push_back(obj);
             m_Selected = (int)m_Objects.size() - 1;
         }
@@ -340,10 +589,37 @@ public:
             ImGui::Separator();
             ImGui::Combo("Forme", &obj.shape, SHAPE_NAMES, IM_ARRAYSIZE(SHAPE_NAMES));
             ImGui::DragFloat3("Position", &obj.position.x, 0.05f);
-            ImGui::DragFloat3("Rotation (deg)", &obj.rotationEuler.x, 0.5f);
-            ImGui::DragFloat3("Echelle", &obj.scale.x, 0.02f, 0.05f, 10.0f);
-            ImGui::ColorEdit3("Couleur", &obj.tint.x);
-            ImGui::DragFloat("Vitesse rotation auto", &obj.rotationSpeed, 0.02f, 0.0f, 5.0f);
+
+            if (obj.shape == Shape_Camera) {
+                ImGui::DragFloat("Pitch (deg)", &obj.rotationEuler.x, 0.5f, -89.0f, 89.0f);
+                ImGui::DragFloat("Yaw (deg)", &obj.rotationEuler.y, 0.5f);
+                if (ImGui::Button("Voir depuis cette camera", ImVec2(-1, 0))) {
+                    m_Camera.Position = obj.position;
+                    m_Camera.Yaw = obj.rotationEuler.y;
+                    m_Camera.Pitch = obj.rotationEuler.x;
+                }
+            } else {
+                ImGui::DragFloat3("Rotation (deg)", &obj.rotationEuler.x, 0.5f);
+                ImGui::DragFloat3("Echelle", &obj.scale.x, 0.02f, 0.05f, 12.0f);
+                ImGui::ColorEdit3("Couleur", &obj.tint.x);
+                ImGui::DragFloat("Vitesse rotation auto", &obj.rotationSpeed, 0.02f, 0.0f, 5.0f);
+            }
+
+            if (obj.shape == Shape_Text) {
+                ImGui::InputText("Texte", (char*)obj.text.c_str(), obj.text.capacity() + 1,
+                    ImGuiInputTextFlags_CallbackResize, TextEditCallback, &obj.text);
+            }
+
+            if (obj.shape == Shape_Cube || obj.shape == Shape_Sphere || obj.shape == Shape_Cylinder) {
+                ImGui::Separator();
+                if (obj.texturePath.empty()) {
+                    ImGui::TextDisabled("Pas de texture (voir panneau Textures)");
+                } else {
+                    ImGui::Text("Texture : %s", fs::path(obj.texturePath).filename().string().c_str());
+                    if (ImGui::Button("Retirer la texture", ImVec2(-1, 0))) obj.texturePath.clear();
+                }
+            }
+
             ImGui::Separator();
             if (ImGui::Button("</> Ouvrir le script (N)", ImVec2(-1, 0))) {
                 OpenScriptEditor(m_Selected);
@@ -355,6 +631,28 @@ public:
             }
         } else {
             ImGui::TextDisabled("Selectionne un objet dans l'Outliner ou clique dessus dans la scene.");
+        }
+        ImGui::End();
+
+        ImGui::Begin("Textures");
+        ImGui::TextWrapped("Depose des images (.png/.jpg/.bmp) dans le dossier \"assets\" a cote de l'executable, puis Rafraichir. Clique une image pour l'appliquer a l'objet selectionne.");
+        if (ImGui::Button("Rafraichir", ImVec2(-1, 0))) RefreshTextureList();
+        ImGui::Separator();
+        if (m_AvailableTextures.empty()) {
+            ImGui::TextDisabled("Aucune image dans /assets pour l'instant.");
+        } else {
+            for (auto& path : m_AvailableTextures) {
+                std::string label = fs::path(path).filename().string();
+                bool isCurrent = (m_Selected >= 0 && m_Selected < (int)m_Objects.size() && m_Objects[m_Selected].texturePath == path);
+                if (ImGui::Selectable(label.c_str(), isCurrent)) {
+                    if (m_Selected >= 0 && m_Selected < (int)m_Objects.size()) {
+                        SceneObject& obj = m_Objects[m_Selected];
+                        if (obj.shape == Shape_Cube || obj.shape == Shape_Sphere || obj.shape == Shape_Cylinder) {
+                            obj.texturePath = path;
+                        }
+                    }
+                }
+            }
         }
         ImGui::End();
 
@@ -375,7 +673,7 @@ public:
         }
 
         ImGui::Begin("Jeu");
-        ImGui::TextWrapped("Personnage jouable pre-fabrique (deplacement + camera 3e personne), code deja ecrit pour gagner du temps.");
+        ImGui::TextWrapped("Personnage jouable pre-fabrique (deplacement + saut + animation + camera 3e personne), code deja ecrit pour gagner du temps.");
         bool wasOn = m_PlayerMode;
         ImGui::Checkbox("Activer le personnage jouable", &m_PlayerMode);
         if (m_PlayerMode && !wasOn) {
@@ -385,7 +683,7 @@ public:
             m_PlayerGrounded = true;
         }
         if (m_PlayerMode) {
-            ImGui::TextWrapped("WASD : marcher, Espace : sauter, Clic droit + souris : orbiter la camera.");
+            ImGui::TextWrapped("WASD : marcher, Espace : sauter, Clic droit + souris : orbiter la camera. Tous les objets de la scene servent de plateformes.");
         } else {
             ImGui::TextDisabled("Desactive : tu gardes la camera libre d'editeur.");
         }
@@ -400,6 +698,20 @@ public:
         ImGui::TextWrapped("Clic droit + souris : regarder autour, WASD : se deplacer, Q/E : monter/descendre, Shift : plus vite");
         ImGui::TextWrapped("Ces panneaux se deplacent et s'arriment ou tu veux (tire un titre).");
         ImGui::End();
+
+        // Labels "Texte" projetes du monde 3D vers l'ecran, par-dessus tout le reste.
+        ImDrawList* fg = ImGui::GetForegroundDrawList();
+        for (auto& obj : m_Objects) {
+            if (obj.shape != Shape_Text) continue;
+            ImVec2 screen;
+            if (!WorldToScreen(obj.position, screen)) continue;
+            float size = 18.0f * (obj.scale.x > 0.2f ? obj.scale.x : 1.0f);
+            ImU32 col = IM_COL32((int)(Clamp01(obj.tint.x) * 255), (int)(Clamp01(obj.tint.y) * 255), (int)(Clamp01(obj.tint.z) * 255), 255);
+            ImVec2 textSize = ImGui::CalcTextSize(obj.text.c_str());
+            ImVec2 pos = { screen.x - textSize.x * 0.5f, screen.y };
+            fg->AddText(nullptr, size, ImVec2(pos.x + 1, pos.y + 1), IM_COL32(0, 0, 0, 180), obj.text.c_str());
+            fg->AddText(nullptr, size, pos, col, obj.text.c_str());
+        }
     }
 
     void OnEvent(WEngine::Event& event) override {
@@ -437,17 +749,25 @@ private:
     std::unique_ptr<WEngine::Mesh> m_Cylinder;
     std::unique_ptr<WEngine::Mesh> m_Grid;
     std::vector<SceneObject> m_Objects;
+    std::unordered_map<std::string, std::unique_ptr<WEngine::Texture>> m_TextureCache;
+    std::vector<std::string> m_AvailableTextures;
     int m_Selected = -1;
     int m_NextId = 5;
     int m_NewShape = Shape_Cube;
     WEngine::Camera m_Camera;
     float m_Time = 0.0f;
     float m_LastFrameTime = 0.0f;
+    WEngine::Mat4 m_LastViewProj;
+    float m_ViewportW = 1.0f, m_ViewportH = 1.0f;
 
     bool m_PlayerMode = false;
     WEngine::Vec3 m_PlayerPos{ 0.0f, 1.0f, 6.0f };
     float m_PlayerVelY = 0.0f;
     bool m_PlayerGrounded = true;
+    bool m_PlayerMoving = false;
+    float m_PlayerFacingYaw = 0.0f;
+    float m_WalkCycle = 0.0f;
+    float m_SquashTimer = 0.0f;
 
     bool m_LeftWasDown = false;
     int m_DraggingAxis = -1;

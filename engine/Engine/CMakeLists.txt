@@ -34,6 +34,8 @@ add_library(Engine STATIC
     src/Engine/Renderer/Mesh.cpp
     src/Engine/Renderer/Camera.h
     src/Engine/Renderer/Camera.cpp
+    src/Engine/Renderer/Texture.h
+    src/Engine/Renderer/Texture.cpp
 
     src/Engine.h
 )
@@ -43,6 +45,8 @@ target_include_directories(Engine
         ${CMAKE_CURRENT_SOURCE_DIR}/src
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/vendor/glad/include
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/vendor/stb
     PUBLIC
         ${imgui_SOURCE_DIR}
         ${imgui_SOURCE_DIR}/backends
