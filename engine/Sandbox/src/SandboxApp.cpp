@@ -89,13 +89,49 @@ struct BlueprintNode {
     ImVec2 pos{ 0.0f, 0.0f };
 };
 
-struct NodeTypeInfo { const char* label; const char* shortLabel; ImU32 color; };
+// Categories a la Unreal : rouge = evenement, or = condition, bleu = action,
+// vert = variable/maths. Grande bibliotheque de blocs (bien plus que les 5
+// de depart) pour couvrir la plupart des besoins d'un jeu simple.
+enum NodeCategory { Cat_Event = 0, Cat_Condition = 1, Cat_Action = 2, Cat_Variable = 3 };
+static const char* CATEGORY_NAMES[] = { "Evenements", "Conditions", "Actions", "Variables / Maths" };
+
+struct NodeTypeInfo { int category; const char* label; const char* shortLabel; ImU32 color; };
 static const NodeTypeInfo NODE_TYPES[] = {
-    { "Evenement : Collision avec le Joueur", "Collision",  IM_COL32(150, 100, 220, 255) },
-    { "Action : -1 Vie",                       "-1 Vie",     IM_COL32(210, 90, 90, 255) },
-    { "Action : Repousser le joueur",          "Repousser",  IM_COL32(230, 150, 60, 255) },
-    { "Condition : Vie <= 0 ?",                "Vie<=0?",    IM_COL32(230, 210, 60, 255) },
-    { "Action : Redemarrer le niveau",         "Redemarrer", IM_COL32(80, 140, 230, 255) },
+    // 0-4 : chaine par defaut a l'ouverture d'un blueprint vide (piege classique)
+    { Cat_Event,     "Evenement : Collision avec le Joueur",   "Collision",   IM_COL32(205, 70, 70, 255) },
+    { Cat_Action,    "Action : -1 Vie",                        "-1 Vie",      IM_COL32(70, 130, 210, 255) },
+    { Cat_Action,    "Action : Repousser le joueur",           "Repousser",   IM_COL32(70, 130, 210, 255) },
+    { Cat_Condition, "Condition : Vie <= 0 ?",                 "Vie<=0?",     IM_COL32(215, 185, 60, 255) },
+    { Cat_Action,    "Action : Redemarrer le niveau",          "Redemarrer",  IM_COL32(70, 130, 210, 255) },
+    // Evenements
+    { Cat_Event,     "Evenement : Debut du jeu",                "Debut jeu",   IM_COL32(205, 70, 70, 255) },
+    { Cat_Event,     "Evenement : Chaque frame (Tick)",         "Tick",        IM_COL32(205, 70, 70, 255) },
+    { Cat_Event,     "Evenement : Touche pressee",              "Touche",      IM_COL32(205, 70, 70, 255) },
+    { Cat_Event,     "Evenement : Cet objet est detruit",       "Detruit",     IM_COL32(205, 70, 70, 255) },
+    // Conditions
+    { Cat_Condition, "Condition : Vie > 0 ?",                   "Vie>0?",      IM_COL32(215, 185, 60, 255) },
+    { Cat_Condition, "Condition : Est au sol ?",                "AuSol?",      IM_COL32(215, 185, 60, 255) },
+    { Cat_Condition, "Condition : Est en train de sauter ?",    "Saute?",      IM_COL32(215, 185, 60, 255) },
+    { Cat_Condition, "Condition : Variable == valeur ?",        "Var==?",      IM_COL32(215, 185, 60, 255) },
+    { Cat_Condition, "Condition : Vitesse > seuil ?",           "Vitesse>?",   IM_COL32(215, 185, 60, 255) },
+    // Actions
+    { Cat_Action,    "Action : +1 Vie",                         "+1 Vie",      IM_COL32(70, 130, 210, 255) },
+    { Cat_Action,    "Action : Teleporter le joueur",           "Teleporter",  IM_COL32(70, 130, 210, 255) },
+    { Cat_Action,    "Action : Detruire cet objet",             "Detruire",    IM_COL32(70, 130, 210, 255) },
+    { Cat_Action,    "Action : Faire apparaitre un objet",      "Spawn",       IM_COL32(70, 130, 210, 255) },
+    { Cat_Action,    "Action : Jouer un son",                   "Son",         IM_COL32(70, 130, 210, 255) },
+    { Cat_Action,    "Action : Changer la couleur",              "Couleur",     IM_COL32(70, 130, 210, 255) },
+    { Cat_Action,    "Action : Activer la gravite",              "Gravite ON",  IM_COL32(70, 130, 210, 255) },
+    { Cat_Action,    "Action : Desactiver la gravite",           "Gravite OFF", IM_COL32(70, 130, 210, 255) },
+    { Cat_Action,    "Action : Appliquer une force",             "Force",       IM_COL32(70, 130, 210, 255) },
+    { Cat_Action,    "Action : Attendre X secondes",             "Attendre",    IM_COL32(70, 130, 210, 255) },
+    { Cat_Action,    "Action : Afficher un message",             "Message",     IM_COL32(70, 130, 210, 255) },
+    { Cat_Action,    "Action : Activer un mecanisme",            "Mecanisme",   IM_COL32(70, 130, 210, 255) },
+    // Variables / Maths
+    { Cat_Variable,  "Variable : Definir une variable",          "Def. var",    IM_COL32(80, 175, 100, 255) },
+    { Cat_Variable,  "Maths : Additionner (A + B)",              "A + B",       IM_COL32(80, 175, 100, 255) },
+    { Cat_Variable,  "Maths : Soustraire (A - B)",                "A - B",       IM_COL32(80, 175, 100, 255) },
+    { Cat_Variable,  "Maths : Nombre aleatoire",                  "Aleatoire",   IM_COL32(80, 175, 100, 255) },
 };
 
 static const char* SHAPE_NAMES[] = { "Cube", "Sphere", "Cylindre", "Camera", "Texte" };
@@ -354,6 +390,31 @@ public:
         return best;
     }
 
+    static constexpr float PLAYER_RADIUS = 0.35f;
+    static constexpr float PLAYER_HALF_HEIGHT = 1.0f;
+
+    // Bloque le joueur devant les cotes des objets (au lieu de les
+    // traverser) : ignore un objet si le joueur a deja les pieds au niveau
+    // (ou au-dessus) de son sommet, pour pouvoir marcher dessus librement.
+    bool CollidesAt(float x, float z, float centerY) {
+        float feet = centerY - PLAYER_HALF_HEIGHT;
+        float head = centerY + PLAYER_HALF_HEIGHT;
+        for (auto& obj : m_Objects) {
+            if (obj.shape == Shape_Camera || obj.shape == Shape_Text) continue;
+            float halfX = std::fabs(obj.scale.x) * 0.5f + PLAYER_RADIUS;
+            float halfZ = std::fabs(obj.scale.z) * 0.5f + PLAYER_RADIUS;
+            float minY = obj.position.y - std::fabs(obj.scale.y) * 0.5f;
+            float maxY = obj.position.y + std::fabs(obj.scale.y) * 0.5f;
+            if (feet >= maxY - 0.1f) continue; // deja dessus (ou au-dessus) : pas de collision laterale
+            if (head <= minY) continue;
+            if (x > obj.position.x - halfX && x < obj.position.x + halfX &&
+                z > obj.position.z - halfZ && z < obj.position.z + halfZ) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     void UpdatePlayer(WEngine::Timestep ts, bool uiHasMouse) {
         if (!uiHasMouse) {
             m_Camera.OnUpdateLookOnly(ts);
@@ -373,12 +434,15 @@ public:
         if (m_PlayerMoving) {
             move = move.Normalized();
             float speed = 5.0f * ts.GetSeconds();
-            m_PlayerPos = m_PlayerPos + move * speed;
+            float newX = m_PlayerPos.x + move.x * speed;
+            float newZ = m_PlayerPos.z + move.z * speed;
+            if (!CollidesAt(newX, m_PlayerPos.z, m_PlayerPos.y)) m_PlayerPos.x = newX;
+            if (!CollidesAt(m_PlayerPos.x, newZ, m_PlayerPos.y)) m_PlayerPos.z = newZ;
             m_PlayerFacingYaw = std::atan2(move.x, move.z);
             m_WalkCycle += ts.GetSeconds() * 10.0f;
         }
 
-        constexpr float GRAVITY = 20.0f, JUMP_SPEED = 8.0f, PLAYER_HALF_HEIGHT = 1.0f;
+        constexpr float GRAVITY = 20.0f, JUMP_SPEED = 8.0f;
         bool wasGrounded = m_PlayerGrounded;
         if (!uiHasMouse && m_PlayerGrounded && WEngine::Input::IsKeyPressed(GLFW_KEY_SPACE)) {
             m_PlayerVelY = JUMP_SPEED;
@@ -591,10 +655,15 @@ public:
             if (obj.shape == Shape_Camera) {
                 ImGui::DragFloat("Pitch (deg)", &obj.rotationEuler.x, 0.5f, -89.0f, 89.0f);
                 ImGui::DragFloat("Yaw (deg)", &obj.rotationEuler.y, 0.5f);
+                ImGui::BeginDisabled(m_PlayerMode);
                 if (ImGui::Button("Voir depuis cette camera", ImVec2(-1, 0))) {
                     m_Camera.Position = obj.position;
                     m_Camera.Yaw = obj.rotationEuler.y;
                     m_Camera.Pitch = obj.rotationEuler.x;
+                }
+                ImGui::EndDisabled();
+                if (m_PlayerMode) {
+                    ImGui::TextDisabled("Disponible en mode edition (arrete le jeu avec F5).");
                 }
             } else {
                 ImGui::DragFloat3("Rotation (deg)", &obj.rotationEuler.x, 0.5f);
@@ -772,20 +841,34 @@ public:
         ImGui::SetNextWindowSize(ImVec2(600, 480), ImGuiCond_FirstUseEver);
         if (!ImGui::Begin(title.c_str(), &m_ShowScriptEditor)) { ImGui::End(); return; }
 
-        ImGui::TextWrapped("Glisse les blocs pour organiser la logique. Ajoute-en avec les boutons ci-dessous.");
+        ImGui::TextWrapped("Glisse les blocs pour organiser la logique. Choisis une categorie et un bloc, puis Ajouter (comme la palette de blueprints d'Unreal).");
         ImGui::Separator();
 
+        ImGui::SetNextItemWidth(170.0f);
+        ImGui::Combo("##bpcat", &m_BpCategory, CATEGORY_NAMES, IM_ARRAYSIZE(CATEGORY_NAMES));
+        ImGui::SameLine();
+
+        std::vector<int> idxInCat;
         for (int t = 0; t < IM_ARRAYSIZE(NODE_TYPES); t++) {
-            if (t > 0) ImGui::SameLine();
-            ImGui::PushID(t);
-            std::string label = std::string("+ ") + NODE_TYPES[t].shortLabel;
-            if (ImGui::SmallButton(label.c_str())) {
-                BlueprintNode n;
-                n.type = t;
-                n.pos = ImVec2(30.0f, 30.0f + (float)obj.blueprint.size() * 40.0f);
-                obj.blueprint.push_back(n);
+            if (NODE_TYPES[t].category == m_BpCategory) idxInCat.push_back(t);
+        }
+        if (m_BpTypePick >= (int)idxInCat.size()) m_BpTypePick = 0;
+
+        ImGui::SetNextItemWidth(280.0f);
+        const char* previewLabel = idxInCat.empty() ? "-" : NODE_TYPES[idxInCat[m_BpTypePick]].label;
+        if (ImGui::BeginCombo("##bptype", previewLabel)) {
+            for (int k = 0; k < (int)idxInCat.size(); k++) {
+                bool sel = (k == m_BpTypePick);
+                if (ImGui::Selectable(NODE_TYPES[idxInCat[k]].label, sel)) m_BpTypePick = k;
             }
-            ImGui::PopID();
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("+ Ajouter le bloc") && !idxInCat.empty()) {
+            BlueprintNode n;
+            n.type = idxInCat[m_BpTypePick];
+            n.pos = ImVec2(30.0f, 30.0f + (float)obj.blueprint.size() * 40.0f);
+            obj.blueprint.push_back(n);
         }
         ImGui::Separator();
 
@@ -893,6 +976,8 @@ private:
 
     bool m_ShowScriptEditor = false;
     int m_ScriptTarget = -1;
+    int m_BpCategory = 0;
+    int m_BpTypePick = 0;
 };
 
 class SandboxApp : public WEngine::Application {
