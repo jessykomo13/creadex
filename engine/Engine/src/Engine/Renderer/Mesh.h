@@ -29,6 +29,8 @@ namespace WEngine {
         static Mesh* CreateGrid(int halfSize, float spacing);
         static Mesh* CreateSphere(int rings = 16, int sectors = 24);
         static Mesh* CreateCylinder(int sectors = 24);
+        // Anneau en fil de fer (rayon 1, dans le plan XZ) : gizmo de rotation.
+        static Mesh* CreateRing(int segments = 48);
 
         // Charge un modele .obj (export standard de Blender). Le modele est
         // recentre et mis a l'echelle pour tenir dans une boite de 1 unite,

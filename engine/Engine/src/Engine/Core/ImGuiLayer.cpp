@@ -150,6 +150,7 @@ namespace WEngine {
             ImGui::DockBuilderDockWindow("Details", rightBottom);
             ImGui::DockBuilderDockWindow("Navigateur de contenu", bottom);
             ImGui::DockBuilderDockWindow("Statistiques", bottom);
+            ImGui::DockBuilderDockWindow("Parametres du monde", bottom);
 
             ImGui::DockBuilderFinish(dockspaceId);
         }

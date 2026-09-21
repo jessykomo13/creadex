@@ -83,6 +83,10 @@ namespace WEngine {
         glUniform3f(GetUniformLocation(name), v0, v1, v2);
     }
 
+    void Shader::SetFloat(const std::string& name, float value) {
+        glUniform1f(GetUniformLocation(name), value);
+    }
+
     void Shader::SetMat4(const std::string& name, const float* matrix) {
         glUniformMatrix4fv(GetUniformLocation(name), 1, GL_FALSE, matrix);
     }

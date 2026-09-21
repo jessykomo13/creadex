@@ -180,6 +180,23 @@ namespace WEngine {
         return new Mesh(v, idx);
     }
 
+    Mesh* Mesh::CreateRing(int segments) {
+        std::vector<Vertex> v;
+        std::vector<uint32_t> idx;
+        const float PI = 3.14159265f;
+        for (int i = 0; i < segments; i++) {
+            float a = 2.0f * PI * (float)i / (float)segments;
+            v.push_back({ std::cos(a), 0.0f, std::sin(a), 0,1,0, 0,0, BASE_COL, BASE_COL, BASE_COL });
+        }
+        for (int i = 0; i < segments; i++) {
+            idx.push_back((uint32_t)i);
+            idx.push_back((uint32_t)((i + 1) % segments));
+        }
+        Mesh* mesh = new Mesh(v, idx);
+        mesh->SetDrawAsLines(true);
+        return mesh;
+    }
+
     // ---- Import .obj (Blender : Fichier > Exporter > Wavefront (.obj)) ----
 
     // "12", "12/4", "12//7" ou "12/4/7" -> indices (1-based, negatifs = depuis la fin)

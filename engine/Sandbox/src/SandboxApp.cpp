@@ -7,6 +7,8 @@
 #include <cstdlib>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <cctype>
 #include <algorithm>
 
@@ -58,6 +60,8 @@ uniform int u_Lit;
 uniform int u_UseTexture;
 uniform sampler2D u_Texture;
 uniform vec3 u_LightDir;
+uniform vec3 u_LightColor;
+uniform float u_Ambient;
 uniform vec3 u_ViewPos;
 
 void main() {
@@ -71,8 +75,7 @@ void main() {
         vec3 viewDir = normalize(u_ViewPos - v_WorldPos);
         vec3 halfDir = normalize(L + viewDir);
         float spec = pow(max(dot(N, halfDir), 0.0), 24.0);
-        float ambient = 0.38;
-        vec3 lit = color * (ambient + diff * 0.72) + vec3(1.0) * spec * 0.12;
+        vec3 lit = color * (u_Ambient + diff * 0.72 * u_LightColor) + u_LightColor * spec * 0.12;
         FragColor = vec4(lit, 1.0);
     } else {
         FragColor = vec4(color, 1.0);
@@ -132,6 +135,21 @@ enum NodeType {
     N_MATH_ADD,
     N_MATH_SUB,
     N_MATH_RANDOM,
+    N_ACT_ROTATE_OBJ,
+    N_ACT_SCALE_OBJ,
+    N_ACT_COLLISION_ON,
+    N_ACT_COLLISION_OFF,
+    N_ACT_DUPLICATE,
+    N_ACT_LOOK_AT_PLAYER,
+    N_ACT_CHASE_PLAYER,
+    N_ACT_SET_PLAYER_SPEED,
+    N_ACT_SET_GRAVITY,
+    N_ACT_ADD_SCORE,
+    N_ACT_WIN,
+    N_ACT_RESET_PLAYER,
+    N_COND_PLAYER_NEAR,
+    N_COND_CHANCE,
+    N_EVT_COLLISION_EXIT,
 };
 
 struct NodeTypeInfo {
@@ -178,6 +196,21 @@ static const NodeTypeInfo NODE_TYPES[] = {
     { Cat_Variable,  "Maths : Ajouter a une variable",       "Var + N",     IM_COL32(80, 175, 100, 255),  P_VAR_NUM,   "Variable / valeur" },
     { Cat_Variable,  "Maths : Soustraire a une variable",    "Var - N",     IM_COL32(80, 175, 100, 255),  P_VAR_NUM,   "Variable / valeur" },
     { Cat_Variable,  "Maths : Nombre aleatoire",             "Aleatoire",   IM_COL32(80, 175, 100, 255),  P_VAR_RANGE, "Variable / min / max" },
+    { Cat_Action,    "Action : Faire tourner cet objet",     "Tourner",     IM_COL32(70, 130, 210, 255),  P_VEC,       "Degres par seconde" },
+    { Cat_Action,    "Action : Changer l'echelle",           "Echelle",     IM_COL32(70, 130, 210, 255),  P_VEC,       "Nouvelle echelle" },
+    { Cat_Action,    "Action : Activer la collision",        "Coll. ON",    IM_COL32(70, 130, 210, 255),  P_NONE,      nullptr },
+    { Cat_Action,    "Action : Desactiver la collision",     "Coll. OFF",   IM_COL32(70, 130, 210, 255),  P_NONE,      nullptr },
+    { Cat_Action,    "Action : Dupliquer cet objet",         "Dupliquer",   IM_COL32(70, 130, 210, 255),  P_VEC,       "Decalage de la copie" },
+    { Cat_Action,    "Action : Se tourner vers le joueur",   "Regarder",    IM_COL32(70, 130, 210, 255),  P_NONE,      nullptr },
+    { Cat_Action,    "Action : Avancer vers le joueur",      "Poursuivre",  IM_COL32(70, 130, 210, 255),  P_AMOUNT,    "Vitesse" },
+    { Cat_Action,    "Action : Vitesse du joueur",           "Vit. joueur", IM_COL32(70, 130, 210, 255),  P_AMOUNT,    "Vitesse" },
+    { Cat_Action,    "Action : Force de gravite",            "Gravite",     IM_COL32(70, 130, 210, 255),  P_AMOUNT,    "Force" },
+    { Cat_Action,    "Action : Ajouter au score",            "+Score",      IM_COL32(70, 130, 210, 255),  P_AMOUNT,    "Points" },
+    { Cat_Action,    "Action : Gagner le niveau",            "Gagner",      IM_COL32(70, 130, 210, 255),  P_NONE,      nullptr },
+    { Cat_Action,    "Action : Renvoyer le joueur au depart", "Depart",     IM_COL32(70, 130, 210, 255),  P_NONE,      nullptr },
+    { Cat_Condition, "Condition : Joueur proche ?",          "Proche?",     IM_COL32(215, 185, 60, 255),  P_THRESHOLD, "Distance" },
+    { Cat_Condition, "Condition : Chance sur 100 ?",         "Chance?",     IM_COL32(215, 185, 60, 255),  P_THRESHOLD, "Pourcentage" },
+    { Cat_Event,     "Evenement : Le joueur quitte l'objet", "Sortie",      IM_COL32(205, 70, 70, 255),   P_NONE,      nullptr },
 };
 static const int NODE_TYPE_COUNT = (int)(sizeof(NODE_TYPES) / sizeof(NODE_TYPES[0]));
 
@@ -247,6 +280,10 @@ struct HudMessage {
 // Etat du jeu pendant le mode Jouer (remis a zero a chaque lancement).
 struct PlayState {
     int life = 3;
+    int score = 0;
+    float playerSpeed = 6.0f;
+    float gravityForce = 20.0f;
+    bool won = false;
     bool gravity = true;
     int activeCamera = -1;      // objet Camera qui donne la vue (-1 = vue par defaut)
     bool cameraFollows = false; // la camera active suit-elle le joueur ?
@@ -274,6 +311,7 @@ public:
         m_Sphere.reset(WEngine::Mesh::CreateSphere());
         m_Cylinder.reset(WEngine::Mesh::CreateCylinder());
         m_Grid.reset(WEngine::Mesh::CreateGrid(20, 1.0f));
+        m_Ring.reset(WEngine::Mesh::CreateRing(64));
         m_PreviewFB = std::make_unique<WEngine::Framebuffer>(384, 216);
 
         // Sol reel : avant, un plan invisible infini faisait "marcher sur
@@ -392,6 +430,7 @@ public:
 
         m_Time += dt;
         m_LastFrameTime = dt;
+        if (m_StatusTimer > 0.0f) m_StatusTimer -= dt;
 
         auto& window = WEngine::Application::Get().GetWindow();
         m_ViewportW = (float)window.GetWidth();
@@ -413,7 +452,7 @@ public:
             WEngine::Mat4 pVP = WEngine::Mat4::Multiply(pProj, previewCam.GetViewMatrix());
 
             m_PreviewFB->Bind();
-            WEngine::Renderer::SetClearColor(0.45f, 0.6f, 0.78f, 1.0f);
+            WEngine::Renderer::SetClearColor(m_SkyColor.x, m_SkyColor.y, m_SkyColor.z, 1.0f);
             WEngine::Renderer::Clear();
             RenderScene(pVP, previewCam.Position, m_Selected, false);
             m_PreviewFB->Unbind((int)m_ViewportW, (int)m_ViewportH);
@@ -421,7 +460,7 @@ public:
         }
 
         // 2) Vue principale
-        WEngine::Renderer::SetClearColor(0.45f, 0.6f, 0.78f, 1.0f);
+        WEngine::Renderer::SetClearColor(m_SkyColor.x, m_SkyColor.y, m_SkyColor.z, 1.0f);
         WEngine::Renderer::Clear();
 
         float aspect = m_ViewportW / m_ViewportH;
@@ -437,7 +476,9 @@ public:
     void RenderScene(const WEngine::Mat4& viewProj, const WEngine::Vec3& viewPos, int skipCamera, bool withGizmoAndPlayer) {
         m_Shader->Bind();
         m_Shader->SetMat4("u_ViewProj", viewProj.m);
-        m_Shader->SetFloat3("u_LightDir", -0.35f, -1.0f, -0.25f);
+        m_Shader->SetFloat3("u_LightDir", m_LightDir.x, m_LightDir.y, m_LightDir.z);
+        m_Shader->SetFloat3("u_LightColor", m_LightColor.x, m_LightColor.y, m_LightColor.z);
+        m_Shader->SetFloat("u_Ambient", m_Ambient);
         m_Shader->SetFloat3("u_ViewPos", viewPos.x, viewPos.y, viewPos.z);
         m_Shader->SetInt("u_Texture", 0);
 
@@ -446,8 +487,9 @@ public:
         m_Shader->SetInt(m_LocUseTex, 0);
         m_Shader->SetFloat3(m_LocTint, 1.0f, 1.0f, 1.0f);
         SetModel(WEngine::Mat4::Identity());
-        m_Grid->Draw();
+        if (m_ShowGrid) m_Grid->Draw();
 
+        if (m_ViewMode == 2) WEngine::Renderer::SetWireframe(true);
         for (int i = 0; i < (int)m_Objects.size(); i++) {
             auto& obj = m_Objects[i];
             if (obj.destroyed) continue;
@@ -473,7 +515,7 @@ public:
             }
 
             WEngine::Texture* tex = obj.texturePath.empty() ? nullptr : GetTexture(obj.texturePath);
-            m_Shader->SetInt(m_LocLit, 1);
+            m_Shader->SetInt(m_LocLit, m_ViewMode == 1 ? 0 : 1);
             if (tex) {
                 tex->Bind(0);
                 m_Shader->SetInt(m_LocUseTex, 1);
@@ -485,13 +527,14 @@ public:
             MeshFor(obj)->Draw();
         }
 
-        if (withGizmoAndPlayer && !m_PlayerMode && m_Selected >= 0 && m_Selected < (int)m_Objects.size()
-            && m_Objects[m_Selected].shape != Shape_Text) {
-            DrawGizmo(m_Objects[m_Selected].position);
-        }
-
         if (m_PlayerMode) {
             DrawPlayer();
+        }
+        if (m_ViewMode == 2) WEngine::Renderer::SetWireframe(false);
+
+        if (withGizmoAndPlayer && !m_PlayerMode && m_Selected >= 0 && m_Selected < (int)m_Objects.size()
+            && m_Objects[m_Selected].shape != Shape_Text) {
+            DrawGizmo(m_Objects[m_Selected]);
         }
     }
 
@@ -583,6 +626,173 @@ public:
         return true;
     }
 
+
+    // ================= Historique / presse-papier =====================
+
+    void PushUndo() {
+        m_UndoStack.push_back(m_Objects);
+        if (m_UndoStack.size() > 64) m_UndoStack.erase(m_UndoStack.begin());
+        m_RedoStack.clear();
+    }
+
+    void Undo() {
+        if (m_UndoStack.empty()) { SetStatus("Rien a annuler"); return; }
+        m_RedoStack.push_back(m_Objects);
+        m_Objects = m_UndoStack.back();
+        m_UndoStack.pop_back();
+        ClampSelection();
+        SetStatus("Annule");
+    }
+
+    void Redo() {
+        if (m_RedoStack.empty()) { SetStatus("Rien a retablir"); return; }
+        m_UndoStack.push_back(m_Objects);
+        m_Objects = m_RedoStack.back();
+        m_RedoStack.pop_back();
+        ClampSelection();
+        SetStatus("Retabli");
+    }
+
+    void ClampSelection() {
+        if (m_Selected >= (int)m_Objects.size()) m_Selected = -1;
+        if (m_ScriptTarget >= (int)m_Objects.size()) { m_ScriptTarget = -1; m_ShowScriptEditor = false; }
+        m_DraggingAxis = -1;
+    }
+
+    void SetStatus(const std::string& msg) {
+        m_StatusMessage = msg;
+        m_StatusTimer = 3.0f;
+    }
+
+    void DuplicateSelected() {
+        if (m_Selected < 0 || m_Selected >= (int)m_Objects.size()) return;
+        PushUndo();
+        SceneObject copy = m_Objects[m_Selected];
+        copy.name += " (copie)";
+        copy.position.x += 1.0f;
+        m_Objects.push_back(copy);
+        m_Selected = (int)m_Objects.size() - 1;
+        SetStatus("Objet duplique");
+    }
+
+    void CopySelected() {
+        if (m_Selected < 0 || m_Selected >= (int)m_Objects.size()) return;
+        m_Clipboard.clear();
+        m_Clipboard.push_back(m_Objects[m_Selected]);
+        SetStatus("Copie");
+    }
+
+    void PasteClipboard() {
+        if (m_Clipboard.empty()) { SetStatus("Presse-papier vide"); return; }
+        PushUndo();
+        for (auto& o : m_Clipboard) {
+            SceneObject copy = o;
+            copy.position.x += 1.0f;
+            m_Objects.push_back(copy);
+        }
+        m_Selected = (int)m_Objects.size() - 1;
+        SetStatus("Colle");
+    }
+
+    // Cadre la vue sur l'objet selectionne (touche F, comme dans Unreal).
+    void FocusSelected() {
+        if (m_Selected < 0 || m_Selected >= (int)m_Objects.size()) return;
+        const SceneObject& o = m_Objects[m_Selected];
+        float size = std::fmax(o.scale.x, std::fmax(o.scale.y, o.scale.z));
+        float dist = 3.0f + size * 1.5f;
+        m_Camera.Position = o.position - m_Camera.Forward() * dist;
+        SetStatus("Vue centree sur " + o.name);
+    }
+
+    // ================= Sauvegarde / chargement de scene ================
+    // Format texte simple, une cle par ligne : lisible et facile a relire.
+
+    bool SaveScene(const std::string& path) {
+        std::ofstream f(path);
+        if (!f) { SetStatus("Impossible d'ecrire " + path); return false; }
+        f << "WENGINE_SCENE 2\n";
+        f << "sky " << m_SkyColor.x << " " << m_SkyColor.y << " " << m_SkyColor.z << "\n";
+        f << "light " << m_LightDir.x << " " << m_LightDir.y << " " << m_LightDir.z << "\n";
+        f << "lightcol " << m_LightColor.x << " " << m_LightColor.y << " " << m_LightColor.z << "\n";
+        f << "ambient " << m_Ambient << "\n";
+        for (const auto& o : m_Objects) {
+            f << "OBJECT\n";
+            f << "name " << o.name << "\n";
+            f << "shape " << o.shape << "\n";
+            f << "pos " << o.position.x << " " << o.position.y << " " << o.position.z << "\n";
+            f << "rot " << o.rotationEuler.x << " " << o.rotationEuler.y << " " << o.rotationEuler.z << "\n";
+            f << "scale " << o.scale.x << " " << o.scale.y << " " << o.scale.z << "\n";
+            f << "tint " << o.tint.x << " " << o.tint.y << " " << o.tint.z << "\n";
+            f << "rotspeed " << o.rotationSpeed << "\n";
+            f << "collision " << (o.collision ? 1 : 0) << "\n";
+            f << "texture " << o.texturePath << "\n";
+            f << "model " << o.modelPath << "\n";
+            f << "text " << o.text << "\n";
+            for (const auto& n : o.blueprint) {
+                f << "node " << n.type << " " << n.pos.x << " " << n.pos.y << " "
+                  << n.a << " " << n.b << " " << n.vec.x << " " << n.vec.y << " " << n.vec.z
+                  << " " << n.sparam << "\n";
+            }
+            f << "ENDOBJECT\n";
+        }
+        SetStatus("Scene sauvegardee dans " + path);
+        return true;
+    }
+
+    bool LoadScene(const std::string& path) {
+        std::ifstream f(path);
+        if (!f) { SetStatus("Fichier introuvable : " + path); return false; }
+
+        std::vector<SceneObject> loaded;
+        SceneObject cur;
+        bool inObject = false;
+        std::string line;
+        while (std::getline(f, line)) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (line == "OBJECT") { cur = SceneObject{}; cur.blueprint.clear(); inObject = true; continue; }
+            if (line == "ENDOBJECT") { if (inObject) loaded.push_back(cur); inObject = false; continue; }
+
+            std::istringstream ss(line);
+            std::string key;
+            ss >> key;
+            auto rest = [&]() { std::string r; std::getline(ss, r); if (!r.empty() && r[0] == ' ') r.erase(0, 1); return r; };
+
+            if (!inObject) {
+                if (key == "sky") ss >> m_SkyColor.x >> m_SkyColor.y >> m_SkyColor.z;
+                else if (key == "light") ss >> m_LightDir.x >> m_LightDir.y >> m_LightDir.z;
+                else if (key == "lightcol") ss >> m_LightColor.x >> m_LightColor.y >> m_LightColor.z;
+                else if (key == "ambient") ss >> m_Ambient;
+                continue;
+            }
+
+            if (key == "name") cur.name = rest();
+            else if (key == "shape") ss >> cur.shape;
+            else if (key == "pos") ss >> cur.position.x >> cur.position.y >> cur.position.z;
+            else if (key == "rot") ss >> cur.rotationEuler.x >> cur.rotationEuler.y >> cur.rotationEuler.z;
+            else if (key == "scale") ss >> cur.scale.x >> cur.scale.y >> cur.scale.z;
+            else if (key == "tint") ss >> cur.tint.x >> cur.tint.y >> cur.tint.z;
+            else if (key == "rotspeed") ss >> cur.rotationSpeed;
+            else if (key == "collision") { int c = 1; ss >> c; cur.collision = (c != 0); }
+            else if (key == "texture") cur.texturePath = rest();
+            else if (key == "model") cur.modelPath = rest();
+            else if (key == "text") cur.text = rest();
+            else if (key == "node") {
+                BlueprintNode n;
+                ss >> n.type >> n.pos.x >> n.pos.y >> n.a >> n.b >> n.vec.x >> n.vec.y >> n.vec.z;
+                n.sparam = rest();
+                if (n.type >= 0 && n.type < NODE_TYPE_COUNT) cur.blueprint.push_back(n);
+            }
+        }
+
+        if (loaded.empty()) { SetStatus("Scene vide ou illisible : " + path); return false; }
+        PushUndo();
+        m_Objects = loaded;
+        ClampSelection();
+        m_Selected = -1;
+        SetStatus("Scene chargee depuis " + path);
+        return true;
+    }
+
     // ================= Moteur de Blueprint =============================
 
     void StartPlay() {
@@ -664,6 +874,7 @@ public:
             bool before = m_Objects[i].touching;
             m_Objects[i].touching = now;
             if (now && !before) FireEvent(i, N_EVT_COLLISION);
+            else if (!now && before) FireEvent(i, N_EVT_COLLISION_EXIT);
         }
 
         ApplyDeferred();
@@ -762,6 +973,7 @@ public:
 
             if (cat == Cat_Event) return;               // debut d'une autre chaine
             if (cat == Cat_Condition) {
+                m_CondObjectPos = m_Objects[objIndex].position;
                 if (!EvalCondition(node)) return;       // condition fausse : on arrete la
                 continue;
             }
@@ -783,6 +995,15 @@ public:
             case N_COND_GROUNDED:  return m_PlayerGrounded;
             case N_COND_JUMPING:   return !m_PlayerGrounded && m_PlayerVelY > 0.0f;
             case N_COND_SPEED:     return std::fabs(m_PlayerVelY) > node.a;
+            case N_COND_PLAYER_NEAR: {
+                WEngine::Vec3 d = m_PlayerPos - m_CondObjectPos;
+                float dist = std::sqrt(WEngine::Vec3::Dot(d, d));
+                return dist < (node.a > 0.0f ? node.a : 5.0f);
+            }
+            case N_COND_CHANCE: {
+                float roll = 100.0f * (float)std::rand() / (float)RAND_MAX;
+                return roll < node.a;
+            }
             case N_COND_VAR_EQ: {
                 auto it = m_Play.vars.find(node.sparam);
                 float v = (it == m_Play.vars.end()) ? 0.0f : it->second;
@@ -895,6 +1116,64 @@ public:
                 m_Play.vars[node.sparam] = lo + t * (hi - lo);
                 break;
             }
+            case N_ACT_ROTATE_OBJ:
+                obj.rotationEuler = obj.rotationEuler + node.vec * m_FrameDt;
+                break;
+            case N_ACT_SCALE_OBJ: {
+                WEngine::Vec3 sc = node.vec;
+                if (sc.x < 0.05f) sc.x = 0.05f;
+                if (sc.y < 0.05f) sc.y = 0.05f;
+                if (sc.z < 0.05f) sc.z = 0.05f;
+                obj.scale = sc;
+                break;
+            }
+            case N_ACT_COLLISION_ON:  obj.collision = true;  break;
+            case N_ACT_COLLISION_OFF: obj.collision = false; break;
+            case N_ACT_DUPLICATE: {
+                SceneObject copy = obj;
+                copy.name = obj.name + " (copie)";
+                copy.position = obj.position + node.vec;
+                copy.blueprint.clear(); // evite une duplication en chaine infinie
+                copy.touching = false;
+                m_PendingSpawns.push_back(copy);
+                break;
+            }
+            case N_ACT_LOOK_AT_PLAYER: {
+                WEngine::Vec3 d = m_PlayerPos - obj.position;
+                obj.rotationEuler.y = std::atan2(d.x, d.z) / DEG2RAD;
+                break;
+            }
+            case N_ACT_CHASE_PLAYER: {
+                WEngine::Vec3 d = m_PlayerPos - obj.position;
+                d.y = 0.0f;
+                d = d.Normalized();
+                float sp = (node.a > 0.0f ? node.a : 2.0f) * m_FrameDt;
+                obj.position = obj.position + d * sp;
+                break;
+            }
+            case N_ACT_SET_PLAYER_SPEED:
+                m_Play.playerSpeed = node.a > 0.0f ? node.a : 6.0f;
+                AddMessage("Vitesse du joueur : " + std::to_string((int)m_Play.playerSpeed));
+                break;
+            case N_ACT_SET_GRAVITY:
+                m_Play.gravityForce = node.a;
+                AddMessage("Gravite : " + std::to_string((int)node.a));
+                break;
+            case N_ACT_ADD_SCORE: {
+                int pts = (int)(node.a != 0.0f ? node.a : 1.0f);
+                m_Play.score += pts;
+                AddMessage("+" + std::to_string(pts) + " points (total " + std::to_string(m_Play.score) + ")");
+                break;
+            }
+            case N_ACT_WIN:
+                m_Play.won = true;
+                AddMessage("NIVEAU TERMINE ! Score : " + std::to_string(m_Play.score));
+                break;
+            case N_ACT_RESET_PLAYER:
+                m_PlayerPos = m_PlayerSpawn;
+                m_PlayerVelY = 0.0f;
+                m_PlayerVelXZ = { 0.0f, 0.0f, 0.0f };
+                break;
             default: break;
         }
         return true;
@@ -965,31 +1244,74 @@ public:
             if (WEngine::Input::IsKeyPressed(GLFW_KEY_D)) move = move + right;
             if (WEngine::Input::IsKeyPressed(GLFW_KEY_A)) move = move - right;
         }
-        m_PlayerMoving = (move.x != 0.0f || move.z != 0.0f);
-        if (m_PlayerMoving) {
-            move = move.Normalized();
-            float speed = 5.0f * ts.GetSeconds();
-            float newX = m_PlayerPos.x + move.x * speed;
-            float newZ = m_PlayerPos.z + move.z * speed;
-            if (!CollidesAt(newX, m_PlayerPos.z, m_PlayerPos.y)) m_PlayerPos.x = newX;
-            if (!CollidesAt(m_PlayerPos.x, newZ, m_PlayerPos.y)) m_PlayerPos.z = newZ;
-            m_PlayerFacingYaw = std::atan2(move.x, move.z);
-            m_WalkCycle += ts.GetSeconds() * 10.0f;
+        // --- Deplacement avec inertie (acceleration / friction / controle
+        //     aerien / sprint), au lieu d'une vitesse constante ---
+        float dt = ts.GetSeconds();
+        bool sprint = WEngine::Input::IsKeyPressed(GLFW_KEY_LEFT_SHIFT);
+        float maxSpeed = m_Play.playerSpeed * (sprint ? 1.7f : 1.0f);
+        bool hasInput = (move.x != 0.0f || move.z != 0.0f);
+        if (hasInput) move = move.Normalized();
+
+        float accel = m_PlayerGrounded ? 50.0f : 50.0f * 0.4f;   // controle aerien reduit
+        float friction = m_PlayerGrounded ? 12.0f : 1.2f;
+
+        // friction
+        float speed = std::sqrt(m_PlayerVelXZ.x * m_PlayerVelXZ.x + m_PlayerVelXZ.z * m_PlayerVelXZ.z);
+        if (speed > 0.0001f) {
+            float drop = speed * friction * dt;
+            float newSpeed = speed - drop;
+            if (newSpeed < 0.0f) newSpeed = 0.0f;
+            m_PlayerVelXZ.x *= newSpeed / speed;
+            m_PlayerVelXZ.z *= newSpeed / speed;
+        }
+        // acceleration
+        if (hasInput) {
+            m_PlayerVelXZ.x += move.x * accel * dt;
+            m_PlayerVelXZ.z += move.z * accel * dt;
+            float sp = std::sqrt(m_PlayerVelXZ.x * m_PlayerVelXZ.x + m_PlayerVelXZ.z * m_PlayerVelXZ.z);
+            if (sp > maxSpeed) {
+                m_PlayerVelXZ.x *= maxSpeed / sp;
+                m_PlayerVelXZ.z *= maxSpeed / sp;
+            }
         }
 
-        constexpr float GRAVITY = 20.0f, JUMP_SPEED = 8.0f;
+        float moveSpeed = std::sqrt(m_PlayerVelXZ.x * m_PlayerVelXZ.x + m_PlayerVelXZ.z * m_PlayerVelXZ.z);
+        m_PlayerMoving = moveSpeed > 0.4f;
+        if (moveSpeed > 0.0001f) {
+            float newX = m_PlayerPos.x + m_PlayerVelXZ.x * dt;
+            float newZ = m_PlayerPos.z + m_PlayerVelXZ.z * dt;
+            if (!CollidesAt(newX, m_PlayerPos.z, m_PlayerPos.y)) m_PlayerPos.x = newX;
+            else m_PlayerVelXZ.x = 0.0f;
+            if (!CollidesAt(m_PlayerPos.x, newZ, m_PlayerPos.y)) m_PlayerPos.z = newZ;
+            else m_PlayerVelXZ.z = 0.0f;
+            m_PlayerFacingYaw = std::atan2(m_PlayerVelXZ.x, m_PlayerVelXZ.z);
+            m_WalkCycle += dt * (4.0f + moveSpeed * 1.4f);
+        }
+
+        const float JUMP_SPEED = 8.0f;
         bool wasGrounded = m_PlayerGrounded;
-        if (!uiHasMouse && m_PlayerGrounded && WEngine::Input::IsKeyPressed(GLFW_KEY_SPACE)) {
+
+        // Coyote time + memorisation du saut : le saut part meme si on
+        // appuie un peu trop tot ou juste apres avoir quitte le sol.
+        bool spaceDown = !uiHasMouse && WEngine::Input::IsKeyPressed(GLFW_KEY_SPACE);
+        if (spaceDown && !m_SpaceWasDown) m_JumpBuffer = 0.12f;
+        m_SpaceWasDown = spaceDown;
+        m_CoyoteTimer = m_PlayerGrounded ? 0.12f : std::fmax(0.0f, m_CoyoteTimer - dt);
+        m_JumpBuffer = std::fmax(0.0f, m_JumpBuffer - dt);
+        if (m_JumpBuffer > 0.0f && m_CoyoteTimer > 0.0f) {
             m_PlayerVelY = JUMP_SPEED;
             m_PlayerGrounded = false;
+            m_JumpBuffer = 0.0f;
+            m_CoyoteTimer = 0.0f;
         }
+
         if (m_Play.gravity) {
-            m_PlayerVelY -= GRAVITY * ts.GetSeconds();
+            m_PlayerVelY -= m_Play.gravityForce * dt;
         } else {
             m_PlayerVelY = 0.0f;
         }
         float feetBefore = m_PlayerPos.y - PLAYER_HALF_HEIGHT;
-        m_PlayerPos.y += m_PlayerVelY * ts.GetSeconds();
+        m_PlayerPos.y += m_PlayerVelY * dt;
         float feetAfter = m_PlayerPos.y - PLAYER_HALF_HEIGHT;
         float ground = SurfaceHeightAt(m_PlayerPos.x, m_PlayerPos.z, feetBefore);
         if (m_Play.gravity && feetAfter <= ground) {
@@ -1072,16 +1394,42 @@ public:
 
     // ---- Gizmo de deplacement ----
 
-    void DrawGizmo(const WEngine::Vec3& pos) {
+    void DrawGizmo(const SceneObject& obj) {
+        const WEngine::Vec3& pos = obj.position;
         m_Shader->SetInt(m_LocLit, 0);
         m_Shader->SetInt(m_LocUseTex, 0);
-        DrawAxisArrow(pos, AXIS_X, 0.95f, 0.25f, 0.25f);
-        DrawAxisArrow(pos, AXIS_Y, 0.25f, 0.95f, 0.3f);
-        DrawAxisArrow(pos, AXIS_Z, 0.3f, 0.45f, 0.95f);
+
+        if (m_GizmoMode == 1) {
+            // Rotation : trois anneaux, un par axe
+            DrawRotationRing(pos, 0, 0.95f, 0.25f, 0.25f);
+            DrawRotationRing(pos, 1, 0.25f, 0.95f, 0.3f);
+            DrawRotationRing(pos, 2, 0.3f, 0.45f, 0.95f);
+            return;
+        }
+
+        bool scaleMode = (m_GizmoMode == 2);
+        DrawAxisHandle(pos, AXIS_X, 0.95f, 0.25f, 0.25f, scaleMode);
+        DrawAxisHandle(pos, AXIS_Y, 0.25f, 0.95f, 0.3f, scaleMode);
+        DrawAxisHandle(pos, AXIS_Z, 0.3f, 0.45f, 0.95f, scaleMode);
     }
 
-    void DrawAxisArrow(const WEngine::Vec3& origin, const WEngine::Vec3& axis, float r, float g, float b) {
-        float shaftLen = GIZMO_LEN * 0.7f, thick = 0.06f, headLen = GIZMO_LEN * 0.3f, headThick = 0.16f;
+    void DrawRotationRing(const WEngine::Vec3& center, int axis, float r, float g, float b) {
+        // L'anneau est cree dans le plan XZ : on le bascule selon l'axe.
+        WEngine::Mat4 orient = WEngine::Mat4::Identity();
+        if (axis == 0) orient = WEngine::Mat4::RotateZ(90.0f * DEG2RAD); // autour de X
+        else if (axis == 2) orient = WEngine::Mat4::RotateX(90.0f * DEG2RAD); // autour de Z
+        WEngine::Mat4 model = WEngine::Mat4::Multiply(
+            WEngine::Mat4::Multiply(WEngine::Mat4::Translate(center), orient),
+            WEngine::Mat4::Scale({ GIZMO_LEN, GIZMO_LEN, GIZMO_LEN }));
+        m_Shader->SetFloat3(m_LocTint, r, g, b);
+        SetModel(model);
+        m_Ring->Draw();
+    }
+
+    void DrawAxisHandle(const WEngine::Vec3& origin, const WEngine::Vec3& axis, float r, float g, float b, bool boxTip) {
+        float shaftLen = GIZMO_LEN * 0.7f, thick = 0.06f;
+        float headLen = boxTip ? 0.22f : GIZMO_LEN * 0.3f;
+        float headThick = boxTip ? 0.22f : 0.16f;
 
         WEngine::Vec3 shaftScale(
             axis.x != 0.0f ? shaftLen : thick,
@@ -1116,13 +1464,46 @@ public:
             if (!leftDown || m_Selected < 0 || m_Selected >= (int)m_Objects.size()) {
                 m_DraggingAxis = -1;
             } else {
+                SceneObject& sel = m_Objects[m_Selected];
                 WEngine::Vec3 axis = m_DraggingAxis == 0 ? AXIS_X : (m_DraggingAxis == 1 ? AXIS_Y : AXIS_Z);
-                WEngine::Vec3 camFwd = m_Camera.Forward();
-                WEngine::Vec3 planeNormal = WEngine::Vec3::Cross(axis, WEngine::Vec3::Cross(camFwd, axis)).Normalized();
-                WEngine::Vec3 hit;
-                if (WEngine::RayPlaneIntersect(ray, m_DragOriginPos, planeNormal, hit)) {
-                    float t = WEngine::Vec3::Dot(hit - m_DragOriginPos, axis);
-                    m_Objects[m_Selected].position = m_DragOriginPos + axis * (t - m_DragStartOffset);
+
+                if (m_GizmoMode == 1) {
+                    // Rotation : le deplacement horizontal de la souris tourne l'objet
+                    float delta = (mx - m_DragStartMouseX) * 0.5f;
+                    if (m_Snap && m_SnapRot > 0.0f) delta = std::round(delta / m_SnapRot) * m_SnapRot;
+                    WEngine::Vec3 rot = m_DragStartRot;
+                    if (m_DraggingAxis == 0) rot.x += delta;
+                    else if (m_DraggingAxis == 1) rot.y += delta;
+                    else rot.z += delta;
+                    sel.rotationEuler = rot;
+                } else if (m_GizmoMode == 2) {
+                    // Echelle : projection sur l'axe comme pour le deplacement
+                    WEngine::Vec3 camFwd = m_Camera.Forward();
+                    WEngine::Vec3 planeNormal = WEngine::Vec3::Cross(axis, WEngine::Vec3::Cross(camFwd, axis)).Normalized();
+                    WEngine::Vec3 hit;
+                    if (WEngine::RayPlaneIntersect(ray, m_DragOriginPos, planeNormal, hit)) {
+                        float t = WEngine::Vec3::Dot(hit - m_DragOriginPos, axis) - m_DragStartOffset;
+                        WEngine::Vec3 sc = m_DragStartScale;
+                        float& target = (m_DraggingAxis == 0) ? sc.x : (m_DraggingAxis == 1 ? sc.y : sc.z);
+                        target += t;
+                        if (m_Snap && m_SnapScale > 0.0f) target = std::round(target / m_SnapScale) * m_SnapScale;
+                        if (target < 0.05f) target = 0.05f;
+                        sel.scale = sc;
+                    }
+                } else {
+                    WEngine::Vec3 camFwd = m_Camera.Forward();
+                    WEngine::Vec3 planeNormal = WEngine::Vec3::Cross(axis, WEngine::Vec3::Cross(camFwd, axis)).Normalized();
+                    WEngine::Vec3 hit;
+                    if (WEngine::RayPlaneIntersect(ray, m_DragOriginPos, planeNormal, hit)) {
+                        float t = WEngine::Vec3::Dot(hit - m_DragOriginPos, axis);
+                        WEngine::Vec3 p = m_DragOriginPos + axis * (t - m_DragStartOffset);
+                        if (m_Snap && m_SnapMove > 0.0f) {
+                            p.x = std::round(p.x / m_SnapMove) * m_SnapMove;
+                            p.y = std::round(p.y / m_SnapMove) * m_SnapMove;
+                            p.z = std::round(p.z / m_SnapMove) * m_SnapMove;
+                        }
+                        sel.position = p;
+                    }
                 }
             }
             return;
@@ -1131,19 +1512,42 @@ public:
         if (!justPressed) return;
 
         if (m_Selected >= 0 && m_Selected < (int)m_Objects.size()) {
-            const WEngine::Vec3& objPos = m_Objects[m_Selected].position;
-            struct { int axis; WEngine::Vec3 dir; } handles[3] = { {0, AXIS_X}, {1, AXIS_Y}, {2, AXIS_Z} };
-            float bestT = 1e9f; int bestAxis = -1;
-            for (auto& h : handles) {
-                WEngine::Vec3 handleCenter = objPos + h.dir * (GIZMO_LEN * 0.75f);
-                float t;
-                if (WEngine::RaySphereIntersect(ray, handleCenter, GIZMO_HANDLE_RADIUS, t) && t < bestT) {
-                    bestT = t; bestAxis = h.axis;
+            const SceneObject& sel = m_Objects[m_Selected];
+            const WEngine::Vec3& objPos = sel.position;
+            int bestAxis = -1;
+
+            if (m_GizmoMode == 1) {
+                // Anneaux : on croise le rayon avec le plan de chaque anneau
+                // et on regarde si le point tombe pres du cercle.
+                float bestDist = 1e9f;
+                for (int a = 0; a < 3; a++) {
+                    WEngine::Vec3 normal = (a == 0) ? AXIS_X : (a == 1 ? AXIS_Y : AXIS_Z);
+                    WEngine::Vec3 hit;
+                    if (!WEngine::RayPlaneIntersect(ray, objPos, normal, hit)) continue;
+                    WEngine::Vec3 d = hit - objPos;
+                    float radius = std::sqrt(WEngine::Vec3::Dot(d, d));
+                    float diff = std::fabs(radius - GIZMO_LEN);
+                    if (diff < 0.25f && diff < bestDist) { bestDist = diff; bestAxis = a; }
+                }
+            } else {
+                float bestT = 1e9f;
+                struct { int axis; WEngine::Vec3 dir; } handles[3] = { {0, AXIS_X}, {1, AXIS_Y}, {2, AXIS_Z} };
+                for (auto& h : handles) {
+                    WEngine::Vec3 handleCenter = objPos + h.dir * (GIZMO_LEN * 0.75f);
+                    float t;
+                    if (WEngine::RaySphereIntersect(ray, handleCenter, GIZMO_HANDLE_RADIUS, t) && t < bestT) {
+                        bestT = t; bestAxis = h.axis;
+                    }
                 }
             }
+
             if (bestAxis >= 0) {
+                PushUndo();
                 m_DraggingAxis = bestAxis;
                 m_DragOriginPos = objPos;
+                m_DragStartScale = sel.scale;
+                m_DragStartRot = sel.rotationEuler;
+                m_DragStartMouseX = mx;
                 WEngine::Vec3 axis = bestAxis == 0 ? AXIS_X : (bestAxis == 1 ? AXIS_Y : AXIS_Z);
                 WEngine::Vec3 camFwd = m_Camera.Forward();
                 WEngine::Vec3 planeNormal = WEngine::Vec3::Cross(axis, WEngine::Vec3::Cross(camFwd, axis)).Normalized();
@@ -1174,6 +1578,7 @@ public:
         DrawOutliner();
         DrawDetails();
         DrawContentBrowser();
+        DrawWorldSettings();
 
         if (m_ShowScriptEditor && m_ScriptTarget >= 0 && m_ScriptTarget < (int)m_Objects.size()) {
             DrawBlueprintEditor(m_Objects[m_ScriptTarget]);
@@ -1190,32 +1595,78 @@ public:
         ImGui::PushStyleColor(ImGuiCol_Button, col);
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(col.x * 1.25f, col.y * 1.25f, col.z * 1.25f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, col);
-        if (ImGui::Button(m_PlayerMode ? "Arreter  (F5)" : "Jouer  (F5)", ImVec2(150, 30))) {
-            TogglePlay();
-        }
+        if (ImGui::Button(m_PlayerMode ? "Arreter  (F5)" : "Jouer  (F5)", ImVec2(130, 28))) TogglePlay();
         ImGui::PopStyleColor(3);
 
         ImGui::SameLine();
+        ImGui::TextDisabled("|");
+        ImGui::SameLine();
+
+        // Outils de transformation (W / E / R comme dans Unreal)
+        const char* toolNames[3] = { "Deplacer (W)", "Tourner (E)", "Redim. (R)" };
+        for (int i = 0; i < 3; i++) {
+            if (i > 0) ImGui::SameLine();
+            bool active = (m_GizmoMode == i);
+            if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.44f, 0.88f, 1.0f));
+            if (ImGui::Button(toolNames[i], ImVec2(105, 28))) m_GizmoMode = i;
+            if (active) ImGui::PopStyleColor();
+        }
+
+        ImGui::SameLine();
+        ImGui::Checkbox("Magnetisme", &m_Snap);
+        if (m_Snap) {
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(70);
+            if (m_GizmoMode == 0) ImGui::DragFloat("##snap", &m_SnapMove, 0.05f, 0.05f, 10.0f, "%.2f u");
+            else if (m_GizmoMode == 1) ImGui::DragFloat("##snap", &m_SnapRot, 1.0f, 1.0f, 90.0f, "%.0f deg");
+            else ImGui::DragFloat("##snap", &m_SnapScale, 0.05f, 0.05f, 5.0f, "%.2f");
+        }
+
+        ImGui::SameLine();
+        ImGui::TextDisabled("|");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(130);
+        const char* viewModes[] = { "Eclaire", "Non eclaire", "Fil de fer" };
+        ImGui::Combo("##viewmode", &m_ViewMode, viewModes, IM_ARRAYSIZE(viewModes));
+
+        ImGui::SameLine();
+        if (ImGui::Button("Sauvegarder (Ctrl+S)", ImVec2(160, 28))) SaveScene(m_ScenePath);
+        ImGui::SameLine();
+        if (ImGui::Button("Charger (Ctrl+O)", ImVec2(140, 28))) LoadScene(m_ScenePath);
+
+        ImGui::SameLine();
+        ImGui::TextDisabled("|");
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
         if (m_PlayerMode) {
-            ImGui::AlignTextToFramePadding();
-            ImGui::Text("  Vie : %d   |   Gravite : %s   |   Vue : %s",
-                m_Play.life,
-                m_Play.gravity ? "ON" : "OFF",
+            ImGui::Text("Vie : %d  |  Score : %d  |  Vue : %s",
+                m_Play.life, m_Play.score,
                 (m_Play.activeCamera >= 0 && m_Play.activeCamera < (int)m_Objects.size())
-                    ? m_Objects[m_Play.activeCamera].name.c_str()
-                    : "par defaut (aucune camera activee)");
+                    ? m_Objects[m_Play.activeCamera].name.c_str() : "par defaut");
+        } else if (m_StatusTimer > 0.0f) {
+            ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "%s", m_StatusMessage.c_str());
         } else {
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextDisabled("  Les Blueprints des objets s'executent quand le jeu tourne. Tout est restaure a l'arret.");
+            ImGui::TextDisabled("Ctrl+Z annuler, Ctrl+D dupliquer, F cadrer, clic droit + WASD naviguer");
         }
         ImGui::End();
     }
 
+    static bool NameMatches(const std::string& name, const std::string& filter) {
+        std::string a = name, b = filter;
+        for (auto& c : a) c = (char)std::tolower((unsigned char)c);
+        for (auto& c : b) c = (char)std::tolower((unsigned char)c);
+        return a.find(b) != std::string::npos;
+    }
+
     void DrawOutliner() {
         ImGui::Begin("Outliner");
+        ImGui::SetNextItemWidth(-1);
+        ImGui::InputTextWithHint("##filter", "Rechercher...", (char*)m_OutlinerFilter.c_str(),
+            m_OutlinerFilter.capacity() + 1, ImGuiInputTextFlags_CallbackResize, TextEditCallback, &m_OutlinerFilter);
         ImGui::TextDisabled("%d objets", (int)m_Objects.size());
         ImGui::Separator();
         for (int i = 0; i < (int)m_Objects.size(); i++) {
+            if (!m_OutlinerFilter.empty() && !NameMatches(m_Objects[i].name, m_OutlinerFilter)) continue;
             bool selected = (m_Selected == i);
             std::string label = m_Objects[i].name;
             if (m_Objects[i].destroyed) label += "  (detruit)";
@@ -1229,6 +1680,7 @@ public:
         ImGui::Combo("##newshape", &m_NewShape, SHAPE_NAMES, IM_ARRAYSIZE(SHAPE_NAMES));
         ImGui::SameLine();
         if (ImGui::Button("+ Ajouter", ImVec2(-1, 0))) {
+            PushUndo();
             WEngine::Vec3 spawnPos = m_Camera.Position + m_Camera.Forward() * 4.0f;
             SceneObject obj;
             obj.name = std::string(SHAPE_NAMES[m_NewShape]) + " " + std::to_string(++m_NextId);
@@ -1253,9 +1705,10 @@ public:
         }
 
         SceneObject& obj = m_Objects[m_Selected];
-        ImGui::Text("%s", obj.name.c_str());
-        ImGui::SameLine();
-        ImGui::TextDisabled("(%s)", SHAPE_NAMES[obj.shape]);
+        ImGui::SetNextItemWidth(-60);
+        ImGui::InputText("Nom", (char*)obj.name.c_str(), obj.name.capacity() + 1,
+            ImGuiInputTextFlags_CallbackResize, TextEditCallback, &obj.name);
+        ImGui::TextDisabled("Type : %s", SHAPE_NAMES[obj.shape]);
         ImGui::Separator();
 
         if (ImGui::CollapsingHeader("Transformation", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1338,6 +1791,7 @@ public:
 
         ImGui::Separator();
         if (ImGui::Button("Supprimer (Suppr)", ImVec2(-1, 0))) {
+            PushUndo();
             DeleteSelected();
         }
         ImGui::End();
@@ -1400,6 +1854,28 @@ public:
         ImGui::End();
     }
 
+    void DrawWorldSettings() {
+        ImGui::Begin("Parametres du monde");
+        if (ImGui::CollapsingHeader("Lumiere", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::DragFloat3("Direction", &m_LightDir.x, 0.02f, -1.0f, 1.0f);
+            ImGui::ColorEdit3("Couleur", &m_LightColor.x);
+            ImGui::SliderFloat("Lumiere ambiante", &m_Ambient, 0.0f, 1.0f);
+        }
+        if (ImGui::CollapsingHeader("Ciel", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::ColorEdit3("Couleur du ciel", &m_SkyColor.x);
+        }
+        if (ImGui::CollapsingHeader("Viewport", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Checkbox("Afficher la grille", &m_ShowGrid);
+            ImGui::DragFloat("Vitesse de la camera", &m_Camera.MoveSpeed, 0.2f, 0.5f, 60.0f);
+        }
+        if (ImGui::CollapsingHeader("Jeu", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::DragFloat("Vitesse du joueur", &m_Play.playerSpeed, 0.1f, 0.5f, 40.0f);
+            ImGui::DragFloat("Force de gravite", &m_Play.gravityForce, 0.5f, 0.0f, 80.0f);
+            ImGui::TextDisabled("Ces valeurs peuvent aussi etre changees par des blocs Blueprint.");
+        }
+        ImGui::End();
+    }
+
     void DrawStatsPanel() {
         ImGui::Begin("Statistiques");
         ImGui::Text("FPS : %.0f", m_LastFrameTime > 0.0f ? 1.0f / m_LastFrameTime : 0.0f);
@@ -1441,7 +1917,21 @@ public:
         fg->AddText(nullptr, 30.0f, ImVec2(x, y),
             m_Play.life > 0 ? IM_COL32(255, 240, 120, 255) : IM_COL32(255, 90, 90, 255), lifeBuf);
 
-        float my = y + 42.0f;
+        if (m_Play.score != 0) {
+            char scoreBuf[64];
+            snprintf(scoreBuf, sizeof(scoreBuf), "Score : %d", m_Play.score);
+            fg->AddText(nullptr, 22.0f, ImVec2(x + 2, y + 34), IM_COL32(0, 0, 0, 200), scoreBuf);
+            fg->AddText(nullptr, 22.0f, ImVec2(x, y + 32), IM_COL32(180, 255, 180, 255), scoreBuf);
+        }
+        if (m_Play.won) {
+            const char* wonText = "NIVEAU TERMINE !";
+            ImVec2 sz = ImGui::CalcTextSize(wonText);
+            float wx = m_ViewportW * 0.5f - sz.x * 1.2f;
+            fg->AddText(nullptr, 44.0f, ImVec2(wx + 2, m_ViewportH * 0.35f + 2), IM_COL32(0, 0, 0, 220), wonText);
+            fg->AddText(nullptr, 44.0f, ImVec2(wx, m_ViewportH * 0.35f), IM_COL32(120, 255, 140, 255), wonText);
+        }
+
+        float my = y + 66.0f;
         for (auto& msg : m_Play.messages) {
             int alpha = (int)(255.0f * Clamp01(msg.timeLeft / 1.5f));
             fg->AddText(nullptr, 20.0f, ImVec2(x + 1, my + 1), IM_COL32(0, 0, 0, alpha), msg.text.c_str());
@@ -1479,10 +1969,39 @@ public:
             return;
         }
 
-        if (e.GetKeyCode() == KEY_N && m_Selected >= 0 && m_Selected < (int)m_Objects.size()) {
+        // --- Raccourcis d'editeur (memes touches que dans Unreal) ---
+        constexpr int KEY_W = 87, KEY_E = 69, KEY_R = 82, KEY_F = 70;
+        constexpr int KEY_Z = 90, KEY_Y = 89, KEY_D = 68, KEY_C = 67, KEY_V = 86;
+        constexpr int KEY_S = 83, KEY_O = 79, KEY_LCTRL = 341, KEY_RCTRL = 345;
+        bool ctrl = WEngine::Input::IsKeyPressed(KEY_LCTRL) || WEngine::Input::IsKeyPressed(KEY_RCTRL);
+        int key = e.GetKeyCode();
+
+        if (ctrl) {
+            switch (key) {
+                case KEY_Z: Undo(); return;
+                case KEY_Y: Redo(); return;
+                case KEY_D: DuplicateSelected(); return;
+                case KEY_C: CopySelected(); return;
+                case KEY_V: PasteClipboard(); return;
+                case KEY_S: SaveScene(m_ScenePath); return;
+                case KEY_O: LoadScene(m_ScenePath); return;
+                default: break;
+            }
+        }
+
+        // W/E/R changent d'outil (la navigation WASD demande le clic droit).
+        if (!WEngine::Input::IsMouseButtonPressed(GLFW_MOUSE_BUTTON_RIGHT)) {
+            if (key == KEY_W) { m_GizmoMode = 0; SetStatus("Outil : Deplacer"); return; }
+            if (key == KEY_E) { m_GizmoMode = 1; SetStatus("Outil : Tourner"); return; }
+            if (key == KEY_R) { m_GizmoMode = 2; SetStatus("Outil : Redimensionner"); return; }
+        }
+        if (key == KEY_F) { FocusSelected(); return; }
+
+        if (key == KEY_N && m_Selected >= 0 && m_Selected < (int)m_Objects.size()) {
             OpenBlueprintEditor(m_Selected);
         }
-        if (e.GetKeyCode() == KEY_DELETE) {
+        if (key == KEY_DELETE) {
+            PushUndo();
             DeleteSelected();
         }
     }
@@ -1724,6 +2243,32 @@ private:
     WEngine::Mat4 m_LastViewProj;
     float m_ViewportW = 1.0f, m_ViewportH = 1.0f;
 
+    // Parametres du monde (panneau dedie)
+    WEngine::Vec3 m_LightDir{ -0.35f, -1.0f, -0.25f };
+    WEngine::Vec3 m_LightColor{ 1.0f, 0.98f, 0.92f };
+    float m_Ambient = 0.38f;
+    WEngine::Vec3 m_SkyColor{ 0.45f, 0.6f, 0.78f };
+    int m_ViewMode = 0;       // 0 Eclaire, 1 Non eclaire, 2 Fil de fer
+    bool m_ShowGrid = true;
+
+    // Gizmo : mode et magnetisme (comme W/E/R + Snap dans Unreal)
+    int m_GizmoMode = 0;      // 0 Deplacer, 1 Tourner, 2 Redimensionner
+    bool m_Snap = false;
+    float m_SnapMove = 0.5f, m_SnapRot = 15.0f, m_SnapScale = 0.25f;
+    WEngine::Vec3 m_DragStartScale{ 1.0f, 1.0f, 1.0f };
+    WEngine::Vec3 m_DragStartRot{ 0.0f, 0.0f, 0.0f };
+    float m_DragStartMouseX = 0.0f;
+
+    // Historique (Ctrl+Z / Ctrl+Y) et presse-papier (Ctrl+C / Ctrl+V)
+    std::vector<std::vector<SceneObject>> m_UndoStack, m_RedoStack;
+    std::vector<SceneObject> m_Clipboard;
+    std::string m_OutlinerFilter;
+    std::string m_ScenePath = "scene.wscene";
+    std::string m_StatusMessage;
+    float m_StatusTimer = 0.0f;
+
+    std::unique_ptr<WEngine::Mesh> m_Ring;
+
     PlayState m_Play;
     std::vector<PendingChain> m_Pending;
     bool m_RestartRequested = false;
@@ -1731,6 +2276,10 @@ private:
     bool m_PlayerMode = false;
     WEngine::Vec3 m_PlayerPos{ 0.0f, 1.0f, 6.0f };
     WEngine::Vec3 m_PlayerSpawn{ 0.0f, 1.0f, 6.0f };
+    WEngine::Vec3 m_PlayerVelXZ{ 0.0f, 0.0f, 0.0f };
+    WEngine::Vec3 m_CondObjectPos{ 0.0f, 0.0f, 0.0f };
+    float m_CoyoteTimer = 0.0f, m_JumpBuffer = 0.0f;
+    bool m_SpaceWasDown = false;
     float m_PlayerVelY = 0.0f;
     bool m_PlayerGrounded = true;
     bool m_PlayerMoving = false;

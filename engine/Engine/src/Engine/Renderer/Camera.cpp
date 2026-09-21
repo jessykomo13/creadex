@@ -63,6 +63,10 @@ namespace WEngine {
     void Camera::OnUpdate(Timestep ts) {
         OnUpdateLookOnly(ts);
 
+        // Comme dans Unreal : la navigation WASD ne marche que pendant que le
+        // clic droit est maintenu, ce qui laisse W/E/R libres pour les outils.
+        if (!Input::IsMouseButtonPressed(GLFW_MOUSE_BUTTON_RIGHT)) return;
+
         float speed = MoveSpeed * (Input::IsKeyPressed(GLFW_KEY_LEFT_SHIFT) ? FastMultiplier : 1.0f) * ts.GetSeconds();
         Vec3 fwd = Forward();
         Vec3 right = Right();

@@ -20,6 +20,7 @@ namespace WEngine {
         void SetFloat4(const std::string& name, float v0, float v1, float v2, float v3);
         void SetMat4(const std::string& name, const float* matrix);
         void SetFloat3(const std::string& name, float v0, float v1, float v2);
+        void SetFloat(const std::string& name, float value);
 
         // Version rapide pour le rendu : on recupere l'emplacement une seule
         // fois (il ne change jamais pour un programme donne) au lieu de
