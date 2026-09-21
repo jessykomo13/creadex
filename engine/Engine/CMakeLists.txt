@@ -36,6 +36,8 @@ add_library(Engine STATIC
     src/Engine/Renderer/Camera.cpp
     src/Engine/Renderer/Texture.h
     src/Engine/Renderer/Texture.cpp
+    src/Engine/Renderer/Framebuffer.h
+    src/Engine/Renderer/Framebuffer.cpp
 
     src/Engine.h
 )

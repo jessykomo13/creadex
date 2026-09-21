@@ -2,6 +2,7 @@
 
 #include <vector>
 #include <cstdint>
+#include <string>
 
 namespace WEngine {
 
@@ -28,6 +29,12 @@ namespace WEngine {
         static Mesh* CreateGrid(int halfSize, float spacing);
         static Mesh* CreateSphere(int rings = 16, int sectors = 24);
         static Mesh* CreateCylinder(int sectors = 24);
+
+        // Charge un modele .obj (export standard de Blender). Le modele est
+        // recentre et mis a l'echelle pour tenir dans une boite de 1 unite,
+        // comme les primitives, pour que l'Echelle de l'Inspecteur se
+        // comporte pareil. Renvoie nullptr si le fichier est illisible.
+        static Mesh* LoadOBJ(const std::string& path);
 
     private:
         unsigned int m_VAO = 0, m_VBO = 0, m_EBO = 0;

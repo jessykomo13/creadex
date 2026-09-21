@@ -1,7 +1,12 @@
 #include "Mesh.h"
+#include "../Core/Log.h"
 
 #include <glad/glad.h>
 #include <cmath>
+#include <fstream>
+#include <sstream>
+#include <array>
+#include <cstdlib>
 
 namespace WEngine {
 
@@ -173,6 +178,143 @@ namespace WEngine {
             idx.push_back(t1); idx.push_back(b0); idx.push_back(b1);
         }
         return new Mesh(v, idx);
+    }
+
+    // ---- Import .obj (Blender : Fichier > Exporter > Wavefront (.obj)) ----
+
+    // "12", "12/4", "12//7" ou "12/4/7" -> indices (1-based, negatifs = depuis la fin)
+    static void ParseOBJFaceRef(const std::string& token, int posCount, int uvCount, int normCount,
+                                int& outPos, int& outUV, int& outNorm) {
+        outPos = outUV = outNorm = -1;
+        int part = 0;
+        std::string cur;
+        auto flush = [&]() {
+            if (!cur.empty()) {
+                int value = std::atoi(cur.c_str());
+                int resolved = -1;
+                if (part == 0) resolved = value > 0 ? value - 1 : posCount + value;
+                else if (part == 1) resolved = value > 0 ? value - 1 : uvCount + value;
+                else resolved = value > 0 ? value - 1 : normCount + value;
+                if (part == 0) outPos = resolved;
+                else if (part == 1) outUV = resolved;
+                else outNorm = resolved;
+            }
+            cur.clear();
+            part++;
+        };
+        for (char c : token) {
+            if (c == '/') flush();
+            else cur += c;
+        }
+        flush();
+    }
+
+    Mesh* Mesh::LoadOBJ(const std::string& path) {
+        std::ifstream file(path);
+        if (!file) {
+            WE_WARN("Modele introuvable ou illisible : ", path);
+            return nullptr;
+        }
+
+        std::vector<std::array<float, 3>> positions;
+        std::vector<std::array<float, 3>> normals;
+        std::vector<std::array<float, 2>> uvs;
+        std::vector<Vertex> verts;
+        std::vector<uint32_t> idx;
+
+        std::string line;
+        while (std::getline(file, line)) {
+            if (line.empty() || line[0] == '#') continue;
+            std::istringstream ss(line);
+            std::string tag;
+            ss >> tag;
+
+            if (tag == "v") {
+                std::array<float, 3> p{ 0, 0, 0 };
+                ss >> p[0] >> p[1] >> p[2];
+                positions.push_back(p);
+            } else if (tag == "vn") {
+                std::array<float, 3> n{ 0, 1, 0 };
+                ss >> n[0] >> n[1] >> n[2];
+                normals.push_back(n);
+            } else if (tag == "vt") {
+                std::array<float, 2> t{ 0, 0 };
+                ss >> t[0] >> t[1];
+                uvs.push_back(t);
+            } else if (tag == "f") {
+                std::vector<uint32_t> faceVerts;
+                std::string token;
+                while (ss >> token) {
+                    int pi, ti, ni;
+                    ParseOBJFaceRef(token, (int)positions.size(), (int)uvs.size(), (int)normals.size(), pi, ti, ni);
+                    if (pi < 0 || pi >= (int)positions.size()) continue;
+
+                    Vertex v{};
+                    v.px = positions[pi][0]; v.py = positions[pi][1]; v.pz = positions[pi][2];
+                    if (ni >= 0 && ni < (int)normals.size()) {
+                        v.nx = normals[ni][0]; v.ny = normals[ni][1]; v.nz = normals[ni][2];
+                    } else {
+                        v.nx = 0.0f; v.ny = 1.0f; v.nz = 0.0f; // corrigee plus bas si absente
+                    }
+                    if (ti >= 0 && ti < (int)uvs.size()) {
+                        v.u = uvs[ti][0]; v.v = uvs[ti][1];
+                    } else {
+                        v.u = 0.0f; v.v = 0.0f;
+                    }
+                    v.r = BASE_COL; v.g = BASE_COL; v.b = BASE_COL;
+
+                    faceVerts.push_back((uint32_t)verts.size());
+                    verts.push_back(v);
+                }
+                // Triangulation en eventail (gere les quads et n-gones de Blender)
+                for (size_t i = 2; i < faceVerts.size(); i++) {
+                    idx.push_back(faceVerts[0]);
+                    idx.push_back(faceVerts[i - 1]);
+                    idx.push_back(faceVerts[i]);
+                }
+            }
+        }
+
+        if (verts.empty() || idx.empty()) {
+            WE_WARN("Modele vide ou non supporte : ", path);
+            return nullptr;
+        }
+
+        // Normales manquantes : on les calcule par face.
+        if (normals.empty()) {
+            for (size_t i = 0; i + 2 < idx.size(); i += 3) {
+                Vertex& a = verts[idx[i]];
+                Vertex& b = verts[idx[i + 1]];
+                Vertex& c = verts[idx[i + 2]];
+                float ux = b.px - a.px, uy = b.py - a.py, uz = b.pz - a.pz;
+                float vx = c.px - a.px, vy = c.py - a.py, vz = c.pz - a.pz;
+                float nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+                float len = std::sqrt(nx * nx + ny * ny + nz * nz);
+                if (len > 1e-8f) { nx /= len; ny /= len; nz /= len; }
+                a.nx = nx; a.ny = ny; a.nz = nz;
+                b.nx = nx; b.ny = ny; b.nz = nz;
+                c.nx = nx; c.ny = ny; c.nz = nz;
+            }
+        }
+
+        // Recentre et met a l'echelle pour tenir dans une boite de 1 unite.
+        float minX = verts[0].px, maxX = minX, minY = verts[0].py, maxY = minY, minZ = verts[0].pz, maxZ = minZ;
+        for (const Vertex& v : verts) {
+            minX = std::fmin(minX, v.px); maxX = std::fmax(maxX, v.px);
+            minY = std::fmin(minY, v.py); maxY = std::fmax(maxY, v.py);
+            minZ = std::fmin(minZ, v.pz); maxZ = std::fmax(maxZ, v.pz);
+        }
+        float cx = (minX + maxX) * 0.5f, cy = (minY + maxY) * 0.5f, cz = (minZ + maxZ) * 0.5f;
+        float extent = std::fmax(maxX - minX, std::fmax(maxY - minY, maxZ - minZ));
+        float scale = (extent > 1e-6f) ? (1.0f / extent) : 1.0f;
+        for (Vertex& v : verts) {
+            v.px = (v.px - cx) * scale;
+            v.py = (v.py - cy) * scale;
+            v.pz = (v.pz - cz) * scale;
+        }
+
+        WE_INFO("Modele charge : ", path, " (", verts.size(), " sommets, ", idx.size() / 3, " triangles)");
+        return new Mesh(verts, idx);
     }
 
 } // namespace WEngine

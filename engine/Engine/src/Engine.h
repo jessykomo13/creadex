@@ -16,6 +16,7 @@
 #include "Engine/Renderer/Mesh.h"
 #include "Engine/Renderer/Camera.h"
 #include "Engine/Renderer/Texture.h"
+#include "Engine/Renderer/Framebuffer.h"
 
 #include <imgui.h>
 

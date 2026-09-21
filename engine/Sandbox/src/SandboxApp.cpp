@@ -190,8 +190,8 @@ struct BlueprintNode {
     WEngine::Vec3 vec{ 1.0f, 1.0f, 1.0f };
 };
 
-static const char* SHAPE_NAMES[] = { "Cube", "Sphere", "Cylindre", "Camera", "Texte" };
-enum ShapeType { Shape_Cube = 0, Shape_Sphere = 1, Shape_Cylinder = 2, Shape_Camera = 3, Shape_Text = 4 };
+static const char* SHAPE_NAMES[] = { "Cube", "Sphere", "Cylindre", "Camera", "Texte", "Modele 3D" };
+enum ShapeType { Shape_Cube = 0, Shape_Sphere = 1, Shape_Cylinder = 2, Shape_Camera = 3, Shape_Text = 4, Shape_Model = 5 };
 
 struct SceneObject {
     std::string name;
@@ -204,7 +204,9 @@ struct SceneObject {
     WEngine::Vec3 rotationEuler{ 0.0f, 0.0f, 0.0f }; // degres ; pour une Camera : x=pitch, y=yaw
     WEngine::Vec3 scale{ 1.0f, 1.0f, 1.0f };
     std::string texturePath; // vide = pas de texture, couleur unie
+    std::string modelPath;   // .obj importe (shape == Shape_Model)
     std::string text = "Texte"; // utilise seulement si shape == Shape_Text
+    bool collision = true;   // l'objet bloque-t-il le joueur / sert-il de sol ?
 
     // Etat de jeu (remis a zero quand on arrete le jeu)
     bool destroyed = false;
@@ -246,7 +248,8 @@ struct HudMessage {
 struct PlayState {
     int life = 3;
     bool gravity = true;
-    int activeCamera = -1; // index de l'objet Camera qui donne la vue, -1 = suit le joueur
+    int activeCamera = -1;      // objet Camera qui donne la vue (-1 = vue par defaut)
+    bool cameraFollows = false; // la camera active suit-elle le joueur ?
     std::unordered_map<std::string, float> vars;
     std::vector<HudMessage> messages;
 };
@@ -270,7 +273,21 @@ public:
         m_Cube.reset(WEngine::Mesh::CreateCube());
         m_Sphere.reset(WEngine::Mesh::CreateSphere());
         m_Cylinder.reset(WEngine::Mesh::CreateCylinder());
-        m_Grid.reset(WEngine::Mesh::CreateGrid(10, 1.0f));
+        m_Grid.reset(WEngine::Mesh::CreateGrid(20, 1.0f));
+        m_PreviewFB = std::make_unique<WEngine::Framebuffer>(384, 216);
+
+        // Sol reel : avant, un plan invisible infini faisait "marcher sur
+        // rien" au-dela de la grille. Maintenant le sol est un objet de la
+        // scene, visible et limite : a cote, on tombe dans le vide.
+        {
+            SceneObject ground;
+            ground.name = "Sol";
+            ground.position = { 0.0f, -0.5f, 0.0f };
+            ground.scale = { 40.0f, 1.0f, 40.0f };
+            ground.tint = { 0.42f, 0.45f, 0.40f };
+            ground.pickRadius = 2.5f;
+            m_Objects.push_back(ground);
+        }
 
         auto addShape = [&](const char* name, WEngine::Vec3 pos, WEngine::Vec3 tint) -> SceneObject& {
             SceneObject o;
@@ -321,7 +338,7 @@ public:
         textObj.tint = { 1.0f, 1.0f, 1.0f };
         m_Objects.push_back(textObj);
 
-        RefreshTextureList();
+        RefreshContentList();
     }
 
     // --- Blueprints par defaut, adaptes au type d'objet ---------------
@@ -339,7 +356,7 @@ public:
 
         if (shape == Shape_Camera) {
             add(N_EVT_BEGIN);
-            add(N_ACT_CAM_ACTIVATE);
+            add(N_ACT_CAM_FOLLOW); // sans ce bloc, la camera ne suit rien
             return bp;
         }
         if (shape == Shape_Text) {
@@ -376,20 +393,52 @@ public:
         m_Time += dt;
         m_LastFrameTime = dt;
 
-        WEngine::Renderer::SetClearColor(0.45f, 0.6f, 0.78f, 1.0f);
-        WEngine::Renderer::Clear();
-
         auto& window = WEngine::Application::Get().GetWindow();
         m_ViewportW = (float)window.GetWidth();
         m_ViewportH = (float)window.GetHeight();
+
+        // 1) Apercu de la camera selectionnee, rendu hors-ecran (comme la
+        //    petite fenetre d'apercu d'Unreal quand on selectionne une camera).
+        m_PreviewValid = false;
+        if (!m_PlayerMode && m_Selected >= 0 && m_Selected < (int)m_Objects.size()
+            && m_Objects[m_Selected].shape == Shape_Camera && !m_Objects[m_Selected].destroyed) {
+            const SceneObject& cam = m_Objects[m_Selected];
+            WEngine::Camera previewCam;
+            previewCam.Position = cam.position;
+            previewCam.Yaw = cam.rotationEuler.y;
+            previewCam.Pitch = cam.rotationEuler.x;
+
+            float pAspect = (float)m_PreviewFB->GetWidth() / (float)m_PreviewFB->GetHeight();
+            WEngine::Mat4 pProj = WEngine::Mat4::Perspective(FOV_Y, pAspect, 0.1f, 150.0f);
+            WEngine::Mat4 pVP = WEngine::Mat4::Multiply(pProj, previewCam.GetViewMatrix());
+
+            m_PreviewFB->Bind();
+            WEngine::Renderer::SetClearColor(0.45f, 0.6f, 0.78f, 1.0f);
+            WEngine::Renderer::Clear();
+            RenderScene(pVP, previewCam.Position, m_Selected, false);
+            m_PreviewFB->Unbind((int)m_ViewportW, (int)m_ViewportH);
+            m_PreviewValid = true;
+        }
+
+        // 2) Vue principale
+        WEngine::Renderer::SetClearColor(0.45f, 0.6f, 0.78f, 1.0f);
+        WEngine::Renderer::Clear();
+
         float aspect = m_ViewportW / m_ViewportH;
         WEngine::Mat4 proj = WEngine::Mat4::Perspective(FOV_Y, aspect, 0.1f, 150.0f);
         m_LastViewProj = WEngine::Mat4::Multiply(proj, m_Camera.GetViewMatrix());
 
+        int hiddenCamera = m_PlayerMode ? m_Play.activeCamera : -1;
+        RenderScene(m_LastViewProj, m_Camera.Position, hiddenCamera, true);
+    }
+
+    // Dessine la scene depuis un point de vue donne. skipCamera : index d'un
+    // objet Camera a ne pas dessiner (on est a l'interieur de son marqueur).
+    void RenderScene(const WEngine::Mat4& viewProj, const WEngine::Vec3& viewPos, int skipCamera, bool withGizmoAndPlayer) {
         m_Shader->Bind();
-        m_Shader->SetMat4("u_ViewProj", m_LastViewProj.m);
+        m_Shader->SetMat4("u_ViewProj", viewProj.m);
         m_Shader->SetFloat3("u_LightDir", -0.35f, -1.0f, -0.25f);
-        m_Shader->SetFloat3("u_ViewPos", m_Camera.Position.x, m_Camera.Position.y, m_Camera.Position.z);
+        m_Shader->SetFloat3("u_ViewPos", viewPos.x, viewPos.y, viewPos.z);
         m_Shader->SetInt("u_Texture", 0);
 
         // Grille : non eclairee, couleur fixe.
@@ -404,9 +453,7 @@ public:
             if (obj.destroyed) continue;
             if (obj.shape == Shape_Text) continue; // rendu en overlay 2D (OnImGuiRender)
             if (obj.shape == Shape_Camera) {
-                // On ne dessine pas le marqueur de la camera qu'on regarde a
-                // travers, sinon on se retrouve a l'interieur de sa geometrie.
-                if (m_PlayerMode && i == m_Play.activeCamera) continue;
+                if (i == skipCamera) continue;
                 DrawCameraMarker(obj, !m_PlayerMode && i == m_Selected);
                 continue;
             }
@@ -435,10 +482,10 @@ public:
             }
             m_Shader->SetFloat3(m_LocTint, tint.x, tint.y, tint.z);
             SetModel(model);
-            MeshFor(obj.shape)->Draw();
+            MeshFor(obj)->Draw();
         }
 
-        if (!m_PlayerMode && m_Selected >= 0 && m_Selected < (int)m_Objects.size()
+        if (withGizmoAndPlayer && !m_PlayerMode && m_Selected >= 0 && m_Selected < (int)m_Objects.size()
             && m_Objects[m_Selected].shape != Shape_Text) {
             DrawGizmo(m_Objects[m_Selected].position);
         }
@@ -455,10 +502,24 @@ public:
         m_Shader->SetMat4(m_LocNormalMat, normalMat.m);
     }
 
-    WEngine::Mesh* MeshFor(int shape) {
-        if (shape == Shape_Sphere) return m_Sphere.get();
-        if (shape == Shape_Cylinder) return m_Cylinder.get();
+    WEngine::Mesh* MeshFor(const SceneObject& obj) {
+        if (obj.shape == Shape_Model && !obj.modelPath.empty()) {
+            WEngine::Mesh* m = GetModel(obj.modelPath);
+            if (m) return m;
+        }
+        if (obj.shape == Shape_Sphere) return m_Sphere.get();
+        if (obj.shape == Shape_Cylinder) return m_Cylinder.get();
         return m_Cube.get();
+    }
+
+    // Modeles .obj importes (Blender), charges une fois puis reutilises.
+    WEngine::Mesh* GetModel(const std::string& path) {
+        auto it = m_ModelCache.find(path);
+        if (it != m_ModelCache.end()) return it->second.get();
+        std::unique_ptr<WEngine::Mesh> mesh(WEngine::Mesh::LoadOBJ(path));
+        WEngine::Mesh* ptr = mesh.get();
+        m_ModelCache[path] = std::move(mesh);
+        return ptr;
     }
 
     WEngine::Texture* GetTexture(const std::string& path) {
@@ -470,8 +531,9 @@ public:
         return ptr;
     }
 
-    void RefreshTextureList() {
+    void RefreshContentList() {
         m_AvailableTextures.clear();
+        m_AvailableModels.clear();
         std::error_code ec;
         fs::path dir = "assets";
         if (!fs::exists(dir, ec)) fs::create_directories(dir, ec);
@@ -482,6 +544,8 @@ public:
             for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
             if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp") {
                 m_AvailableTextures.push_back(entry.path().string());
+            } else if (ext == ".obj") {
+                m_AvailableModels.push_back(entry.path().string());
             }
         }
     }
@@ -560,6 +624,7 @@ public:
 
     bool PlayerTouches(const SceneObject& obj) const {
         if (obj.shape == Shape_Camera || obj.shape == Shape_Text) return false;
+        if (!obj.collision) return false;
         // Marge un peu plus large que celle du blocage (CollidesAt), sinon le
         // joueur s'arrete pile au bord sans jamais "toucher" l'objet.
         const float TOUCH_MARGIN = 0.15f;
@@ -609,15 +674,24 @@ public:
             if (m_Play.messages[i].timeLeft <= 0.0f) m_Play.messages.erase(m_Play.messages.begin() + i);
         }
 
-        // 4. La vue suit la camera active, sinon le personnage
+        // 4. La vue vient de la camera activee par un blueprint, sinon de la
+        //    vue par defaut derriere le personnage.
         if (m_Play.activeCamera >= 0 && m_Play.activeCamera < (int)m_Objects.size()) {
-            const SceneObject& cam = m_Objects[m_Play.activeCamera];
-            if (cam.shape == Shape_Camera && !cam.destroyed) {
+            SceneObject& cam = m_Objects[m_Play.activeCamera];
+            if (cam.shape != Shape_Camera || cam.destroyed) {
+                m_Play.activeCamera = -1;
+            } else if (m_Play.cameraFollows) {
+                // La camera se place derriere le joueur (l'objet Camera bouge
+                // vraiment : on le voit dans l'Outliner et les Details).
+                WEngine::Vec3 offset = m_Camera.Forward() * -5.0f + WEngine::Vec3(0.0f, 2.0f, 0.0f);
+                cam.position = m_PlayerPos + offset;
+                cam.rotationEuler.y = m_Camera.Yaw;
+                cam.rotationEuler.x = m_Camera.Pitch;
+                m_Camera.Position = cam.position;
+            } else {
                 m_Camera.Position = cam.position;
                 m_Camera.Yaw = cam.rotationEuler.y;
                 m_Camera.Pitch = cam.rotationEuler.x;
-            } else {
-                m_Play.activeCamera = -1;
             }
         }
     }
@@ -785,14 +859,22 @@ public:
             case N_ACT_CAM_ACTIVATE:
                 if (obj.shape == Shape_Camera) {
                     m_Play.activeCamera = objIndex;
-                    AddMessage("Vue : " + obj.name);
+                    m_Play.cameraFollows = false; // camera fixe
+                    AddMessage("Vue : " + obj.name + " (fixe)");
                 } else {
                     AddMessage("\"Activer cette camera\" ne marche que sur un objet Camera");
                 }
                 break;
             case N_ACT_CAM_FOLLOW:
-                m_Play.activeCamera = -1;
-                AddMessage("Vue : le personnage");
+                // C'est CE bloc qui fait suivre le joueur : sans lui, une
+                // camera ne suit rien.
+                if (obj.shape == Shape_Camera) {
+                    m_Play.activeCamera = objIndex;
+                    m_Play.cameraFollows = true;
+                    AddMessage("Vue : " + obj.name + " (suit le joueur)");
+                } else {
+                    AddMessage("\"Suivre le joueur\" ne marche que sur un objet Camera");
+                }
                 break;
             case N_ACT_SET_TEXT:
                 obj.text = node.sparam.empty() ? obj.text : node.sparam;
@@ -820,10 +902,14 @@ public:
 
     // ---- Personnage jouable : mouvement, saut, animation procedurale ----
 
+    // Plus de sol infini invisible : s'il n'y a aucun objet sous les pieds,
+    // on tombe. Le sol de la scene est l'objet "Sol".
+    static constexpr float VOID_Y = -1000.0f;
+
     float SurfaceHeightAt(float x, float z, float refY) {
-        float best = 0.0f; // sol de base (grille, y=0)
+        float best = VOID_Y;
         for (auto& obj : m_Objects) {
-            if (obj.destroyed) continue;
+            if (obj.destroyed || !obj.collision) continue;
             if (obj.shape == Shape_Camera || obj.shape == Shape_Text) continue;
             float halfX = std::fabs(obj.scale.x) * 0.5f, halfZ = std::fabs(obj.scale.z) * 0.5f;
             if (x >= obj.position.x - halfX && x <= obj.position.x + halfX &&
@@ -847,7 +933,7 @@ public:
         float feet = centerY - PLAYER_HALF_HEIGHT;
         float head = centerY + PLAYER_HALF_HEIGHT;
         for (auto& obj : m_Objects) {
-            if (obj.destroyed) continue;
+            if (obj.destroyed || !obj.collision) continue;
             if (obj.shape == Shape_Camera || obj.shape == Shape_Text) continue;
             float halfX = std::fabs(obj.scale.x) * 0.5f + PLAYER_RADIUS;
             float halfZ = std::fabs(obj.scale.z) * 0.5f + PLAYER_RADIUS;
@@ -864,7 +950,7 @@ public:
     }
 
     void UpdatePlayer(WEngine::Timestep ts, bool uiHasMouse) {
-        bool freeLook = (m_Play.activeCamera < 0); // une camera active pilote la vue
+        bool freeLook = (m_Play.activeCamera < 0 || m_Play.cameraFollows);
         if (!uiHasMouse && freeLook) {
             m_Camera.OnUpdateLookOnly(ts);
         }
@@ -917,6 +1003,16 @@ public:
         if (m_SquashTimer > 0.0f) {
             m_SquashTimer -= ts.GetSeconds();
             if (m_SquashTimer < 0.0f) m_SquashTimer = 0.0f;
+        }
+
+        // Tombe hors du monde : on perd une vie et on revient au depart.
+        if (m_PlayerPos.y < -15.0f) {
+            m_Play.life -= 1;
+            AddMessage("Tombe dans le vide ! (vie : " + std::to_string(m_Play.life) + ")");
+            m_PlayerPos = m_PlayerSpawn;
+            m_PlayerVelY = 0.0f;
+            m_PlayerGrounded = true;
+            if (m_Play.life <= 0) m_RestartRequested = true;
         }
 
         if (freeLook) {
@@ -1074,17 +1170,45 @@ public:
     // ================= Interface ======================================
 
     void OnImGuiRender() override {
+        DrawToolbar();
         DrawOutliner();
-        DrawInspector();
-        DrawTexturesPanel();
+        DrawDetails();
+        DrawContentBrowser();
 
         if (m_ShowScriptEditor && m_ScriptTarget >= 0 && m_ScriptTarget < (int)m_Objects.size()) {
             DrawBlueprintEditor(m_Objects[m_ScriptTarget]);
         }
 
-        DrawPlayPanel();
         DrawStatsPanel();
         DrawWorldOverlay();
+    }
+
+    // Barre d'outils en haut, comme dans Unreal : le bouton Jouer y vit.
+    void DrawToolbar() {
+        ImGui::Begin("Barre d'outils");
+        ImVec4 col = m_PlayerMode ? ImVec4(0.72f, 0.18f, 0.18f, 1.0f) : ImVec4(0.14f, 0.52f, 0.20f, 1.0f);
+        ImGui::PushStyleColor(ImGuiCol_Button, col);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(col.x * 1.25f, col.y * 1.25f, col.z * 1.25f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, col);
+        if (ImGui::Button(m_PlayerMode ? "Arreter  (F5)" : "Jouer  (F5)", ImVec2(150, 30))) {
+            TogglePlay();
+        }
+        ImGui::PopStyleColor(3);
+
+        ImGui::SameLine();
+        if (m_PlayerMode) {
+            ImGui::AlignTextToFramePadding();
+            ImGui::Text("  Vie : %d   |   Gravite : %s   |   Vue : %s",
+                m_Play.life,
+                m_Play.gravity ? "ON" : "OFF",
+                (m_Play.activeCamera >= 0 && m_Play.activeCamera < (int)m_Objects.size())
+                    ? m_Objects[m_Play.activeCamera].name.c_str()
+                    : "par defaut (aucune camera activee)");
+        } else {
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("  Les Blueprints des objets s'executent quand le jeu tourne. Tout est restaure a l'arret.");
+        }
+        ImGui::End();
     }
 
     void DrawOutliner() {
@@ -1101,7 +1225,9 @@ public:
             ImGui::PopID();
         }
         ImGui::Separator();
-        ImGui::Combo("Forme", &m_NewShape, SHAPE_NAMES, IM_ARRAYSIZE(SHAPE_NAMES));
+        ImGui::SetNextItemWidth(-90.0f);
+        ImGui::Combo("##newshape", &m_NewShape, SHAPE_NAMES, IM_ARRAYSIZE(SHAPE_NAMES));
+        ImGui::SameLine();
         if (ImGui::Button("+ Ajouter", ImVec2(-1, 0))) {
             WEngine::Vec3 spawnPos = m_Camera.Position + m_Camera.Forward() * 4.0f;
             SceneObject obj;
@@ -1110,144 +1236,182 @@ public:
             obj.tint = { 0.8f, 0.8f, 0.8f };
             obj.shape = m_NewShape;
             if (m_NewShape == Shape_Text) obj.text = "Nouveau texte";
+            if (m_NewShape == Shape_Camera || m_NewShape == Shape_Text) obj.collision = false;
             m_Objects.push_back(obj);
             m_Selected = (int)m_Objects.size() - 1;
         }
         ImGui::End();
     }
 
-    void DrawInspector() {
-        ImGui::Begin("Inspecteur");
-        if (m_Selected >= 0 && m_Selected < (int)m_Objects.size()) {
-            SceneObject& obj = m_Objects[m_Selected];
-            ImGui::Text("%s", obj.name.c_str());
-            ImGui::Separator();
-            ImGui::Combo("Forme", &obj.shape, SHAPE_NAMES, IM_ARRAYSIZE(SHAPE_NAMES));
-            ImGui::DragFloat3("Position", &obj.position.x, 0.05f);
+    // Panneau Details organise en sections comme Unreal.
+    void DrawDetails() {
+        ImGui::Begin("Details");
+        if (m_Selected < 0 || m_Selected >= (int)m_Objects.size()) {
+            ImGui::TextDisabled("Selectionne un objet dans l'Outliner ou clique dessus dans la scene.");
+            ImGui::End();
+            return;
+        }
 
+        SceneObject& obj = m_Objects[m_Selected];
+        ImGui::Text("%s", obj.name.c_str());
+        ImGui::SameLine();
+        ImGui::TextDisabled("(%s)", SHAPE_NAMES[obj.shape]);
+        ImGui::Separator();
+
+        if (ImGui::CollapsingHeader("Transformation", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::DragFloat3("Emplacement", &obj.position.x, 0.05f);
             if (obj.shape == Shape_Camera) {
-                ImGui::DragFloat("Pitch (deg)", &obj.rotationEuler.x, 0.5f, -89.0f, 89.0f);
-                ImGui::DragFloat("Yaw (deg)", &obj.rotationEuler.y, 0.5f);
+                ImGui::DragFloat("Rotation X (pitch)", &obj.rotationEuler.x, 0.5f, -89.0f, 89.0f);
+                ImGui::DragFloat("Rotation Y (yaw)", &obj.rotationEuler.y, 0.5f);
+            } else {
+                ImGui::DragFloat3("Rotation", &obj.rotationEuler.x, 0.5f);
+                ImGui::DragFloat3("Echelle", &obj.scale.x, 0.02f, 0.05f, 40.0f);
+            }
+        }
+
+        if (obj.shape == Shape_Camera) {
+            if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (m_PreviewValid) {
+                    ImGui::TextDisabled("Apercu de la camera :");
+                    float w = ImGui::GetContentRegionAvail().x;
+                    float h = w * (float)m_PreviewFB->GetHeight() / (float)m_PreviewFB->GetWidth();
+                    ImGui::Image((ImTextureID)(intptr_t)m_PreviewFB->GetColorAttachment(),
+                        ImVec2(w, h), ImVec2(0, 1), ImVec2(1, 0));
+                }
                 ImGui::BeginDisabled(m_PlayerMode);
-                if (ImGui::Button("Voir depuis cette camera", ImVec2(-1, 0))) {
+                if (ImGui::Button("Placer la vue d'editeur ici", ImVec2(-1, 0))) {
                     m_Camera.Position = obj.position;
                     m_Camera.Yaw = obj.rotationEuler.y;
                     m_Camera.Pitch = obj.rotationEuler.x;
                 }
                 ImGui::EndDisabled();
-                if (m_PlayerMode) {
-                    ImGui::TextDisabled("En jeu : utilise le bloc \"Activer cette camera\".");
-                }
-            } else {
-                ImGui::DragFloat3("Rotation (deg)", &obj.rotationEuler.x, 0.5f);
-                ImGui::DragFloat3("Echelle", &obj.scale.x, 0.02f, 0.05f, 12.0f);
+                ImGui::TextWrapped("Pour que cette camera serve en jeu, son Blueprint doit contenir "
+                                   "\"Suivre le joueur\" (camera qui suit) ou \"Activer cette camera\" (camera fixe).");
+            }
+        }
+
+        if (obj.shape != Shape_Camera && obj.shape != Shape_Text) {
+            if (ImGui::CollapsingHeader("Rendu", ImGuiTreeNodeFlags_DefaultOpen)) {
                 ImGui::ColorEdit3("Couleur", &obj.tint.x);
-                ImGui::DragFloat("Vitesse rotation auto", &obj.rotationSpeed, 0.02f, 0.0f, 5.0f);
-            }
-
-            if (obj.shape == Shape_Text) {
-                ImGui::InputText("Texte", (char*)obj.text.c_str(), obj.text.capacity() + 1,
-                    ImGuiInputTextFlags_CallbackResize, TextEditCallback, &obj.text);
-            }
-
-            if (obj.shape == Shape_Cube || obj.shape == Shape_Sphere || obj.shape == Shape_Cylinder) {
-                ImGui::Separator();
+                ImGui::DragFloat("Rotation auto", &obj.rotationSpeed, 0.02f, 0.0f, 5.0f);
+                if (obj.shape == Shape_Model) {
+                    if (obj.modelPath.empty()) {
+                        ImGui::TextDisabled("Aucun modele (Navigateur de contenu > Modeles)");
+                    } else {
+                        ImGui::Text("Modele : %s", fs::path(obj.modelPath).filename().string().c_str());
+                        if (ImGui::Button("Retirer le modele", ImVec2(-1, 0))) obj.modelPath.clear();
+                    }
+                }
                 if (obj.texturePath.empty()) {
-                    ImGui::TextDisabled("Pas de texture (voir panneau Textures)");
+                    ImGui::TextDisabled("Aucune texture (Navigateur de contenu > Textures)");
                 } else {
                     ImGui::Text("Texture : %s", fs::path(obj.texturePath).filename().string().c_str());
                     if (ImGui::Button("Retirer la texture", ImVec2(-1, 0))) obj.texturePath.clear();
                 }
             }
 
-            ImGui::Separator();
-            std::string bpLabel = obj.blueprint.empty()
-                ? "Blueprint visuel (N)"
-                : "Blueprint visuel (N) - " + std::to_string(obj.blueprint.size()) + " blocs";
-            if (ImGui::Button(bpLabel.c_str(), ImVec2(-1, 0))) {
+            if (ImGui::CollapsingHeader("Collision", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::Checkbox("Bloquer le joueur / servir de sol", &obj.collision);
+                if (!obj.collision) ImGui::TextDisabled("Le joueur passe au travers de cet objet.");
+            }
+        }
+
+        if (obj.shape == Shape_Text) {
+            if (ImGui::CollapsingHeader("Texte", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::InputText("Contenu", (char*)obj.text.c_str(), obj.text.capacity() + 1,
+                    ImGuiInputTextFlags_CallbackResize, TextEditCallback, &obj.text);
+                ImGui::ColorEdit3("Couleur", &obj.tint.x);
+                ImGui::DragFloat("Taille", &obj.scale.x, 0.02f, 0.2f, 8.0f);
+            }
+        }
+
+        if (ImGui::CollapsingHeader("Blueprint", ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (obj.blueprint.empty()) {
+                ImGui::TextDisabled("Aucun blueprint sur cet objet.");
+            } else {
+                ImGui::Text("%d blocs", (int)obj.blueprint.size());
+            }
+            if (ImGui::Button("Ouvrir le Blueprint (N)", ImVec2(-1, 0))) {
                 OpenBlueprintEditor(m_Selected);
             }
-            ImGui::Separator();
-            if (ImGui::Button("Supprimer (Suppr)", ImVec2(-1, 0))) {
-                DeleteSelected();
-            }
-        } else {
-            ImGui::TextDisabled("Selectionne un objet dans l'Outliner ou clique dessus dans la scene.");
+        }
+
+        ImGui::Separator();
+        if (ImGui::Button("Supprimer (Suppr)", ImVec2(-1, 0))) {
+            DeleteSelected();
         }
         ImGui::End();
     }
 
-    void DrawTexturesPanel() {
-        ImGui::Begin("Textures");
-        ImGui::TextWrapped("Depose des images (.png/.jpg/.bmp) dans le dossier \"assets\" a cote de l'executable, puis Rafraichir. Clique une image pour l'appliquer a l'objet selectionne.");
-        if (ImGui::Button("Rafraichir", ImVec2(-1, 0))) RefreshTextureList();
+    void DrawContentBrowser() {
+        ImGui::Begin("Navigateur de contenu");
+        if (ImGui::Button("Rafraichir")) RefreshContentList();
+        ImGui::SameLine();
+        ImGui::TextDisabled("Depose tes fichiers dans le dossier \"assets\" a cote de l'executable "
+                            "(.png/.jpg pour les textures, .obj exporte de Blender pour les modeles).");
         ImGui::Separator();
-        if (m_AvailableTextures.empty()) {
-            ImGui::TextDisabled("Aucune image dans /assets pour l'instant.");
-        } else {
-            for (auto& path : m_AvailableTextures) {
-                std::string label = fs::path(path).filename().string();
-                bool isCurrent = (m_Selected >= 0 && m_Selected < (int)m_Objects.size() && m_Objects[m_Selected].texturePath == path);
-                if (ImGui::Selectable(label.c_str(), isCurrent)) {
-                    if (m_Selected >= 0 && m_Selected < (int)m_Objects.size()) {
-                        SceneObject& obj = m_Objects[m_Selected];
-                        if (obj.shape == Shape_Cube || obj.shape == Shape_Sphere || obj.shape == Shape_Cylinder) {
-                            obj.texturePath = path;
+
+        if (ImGui::BeginTabBar("##content")) {
+            if (ImGui::BeginTabItem("Textures")) {
+                if (m_AvailableTextures.empty()) {
+                    ImGui::TextDisabled("Aucune image dans /assets.");
+                } else {
+                    ImGui::TextDisabled("Clique une image pour l'appliquer a l'objet selectionne.");
+                    for (auto& path : m_AvailableTextures) {
+                        std::string label = fs::path(path).filename().string();
+                        bool isCurrent = (m_Selected >= 0 && m_Selected < (int)m_Objects.size()
+                                          && m_Objects[m_Selected].texturePath == path);
+                        if (ImGui::Selectable(label.c_str(), isCurrent)) {
+                            if (m_Selected >= 0 && m_Selected < (int)m_Objects.size()) {
+                                SceneObject& obj = m_Objects[m_Selected];
+                                if (obj.shape != Shape_Camera && obj.shape != Shape_Text) obj.texturePath = path;
+                            }
                         }
                     }
                 }
+                ImGui::EndTabItem();
             }
-        }
-        ImGui::End();
-    }
-
-    void DrawPlayPanel() {
-        ImGui::Begin("Jouer");
-        ImVec4 col = m_PlayerMode ? ImVec4(0.75f, 0.2f, 0.2f, 1.0f) : ImVec4(0.2f, 0.65f, 0.25f, 1.0f);
-        ImGui::PushStyleColor(ImGuiCol_Button, col);
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, col);
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, col);
-        if (ImGui::Button(m_PlayerMode ? "Arreter (F5)" : "Lancer le jeu (F5)", ImVec2(-1, 44))) {
-            TogglePlay();
-        }
-        ImGui::PopStyleColor(3);
-        ImGui::Separator();
-
-        if (m_PlayerMode) {
-            ImGui::Text("Vie : %d", m_Play.life);
-            ImGui::SameLine();
-            ImGui::Text("| Gravite : %s", m_Play.gravity ? "ON" : "OFF");
-            if (m_Play.activeCamera >= 0 && m_Play.activeCamera < (int)m_Objects.size()) {
-                ImGui::Text("Vue : %s (bloc \"Activer cette camera\")", m_Objects[m_Play.activeCamera].name.c_str());
-            } else {
-                ImGui::Text("Vue : le personnage");
-            }
-            if (!m_Play.vars.empty()) {
-                ImGui::Separator();
-                ImGui::TextDisabled("Variables :");
-                for (auto& kv : m_Play.vars) {
-                    ImGui::Text("  %s = %.2f", kv.first.c_str(), kv.second);
+            if (ImGui::BeginTabItem("Modeles 3D")) {
+                if (m_AvailableModels.empty()) {
+                    ImGui::TextDisabled("Aucun .obj dans /assets.");
+                    ImGui::TextWrapped("Dans Blender : Fichier > Exporter > Wavefront (.obj), enregistre "
+                                       "dans le dossier assets, puis Rafraichir.");
+                } else {
+                    ImGui::TextDisabled("Clique un modele pour l'appliquer a l'objet selectionne.");
+                    for (auto& path : m_AvailableModels) {
+                        std::string label = fs::path(path).filename().string();
+                        bool isCurrent = (m_Selected >= 0 && m_Selected < (int)m_Objects.size()
+                                          && m_Objects[m_Selected].modelPath == path);
+                        if (ImGui::Selectable(label.c_str(), isCurrent)) {
+                            if (m_Selected >= 0 && m_Selected < (int)m_Objects.size()) {
+                                SceneObject& obj = m_Objects[m_Selected];
+                                if (obj.shape != Shape_Camera && obj.shape != Shape_Text) {
+                                    obj.modelPath = path;
+                                    obj.shape = Shape_Model;
+                                }
+                            }
+                        }
+                    }
                 }
+                ImGui::EndTabItem();
             }
-            ImGui::Separator();
-            ImGui::TextWrapped("WASD : marcher, Espace : sauter, clic droit + souris : orbiter la camera. Les blueprints des objets tournent pour de vrai.");
-        } else {
-            ImGui::TextWrapped("Lance le jeu pour executer les Blueprints des objets. Tout ce qu'ils changent (couleur, objets detruits, vies) est annule quand tu arretes.");
+            ImGui::EndTabBar();
         }
         ImGui::End();
     }
 
     void DrawStatsPanel() {
-        ImGui::Begin("Stats");
-        ImGui::Text("FPS: %.0f", m_LastFrameTime > 0.0f ? 1.0f / m_LastFrameTime : 0.0f);
-        ImGui::Text("Camera pos: %.1f, %.1f, %.1f", m_Camera.Position.x, m_Camera.Position.y, m_Camera.Position.z);
+        ImGui::Begin("Statistiques");
+        ImGui::Text("FPS : %.0f", m_LastFrameTime > 0.0f ? 1.0f / m_LastFrameTime : 0.0f);
+        ImGui::Text("Objets : %d", (int)m_Objects.size());
+        ImGui::Text("Camera : %.1f, %.1f, %.1f", m_Camera.Position.x, m_Camera.Position.y, m_Camera.Position.z);
         ImGui::Separator();
         ImGui::TextWrapped("Clic gauche sur un objet : le selectionner");
         ImGui::TextWrapped("Clic gauche + tirer une fleche du gizmo : le deplacer sur cet axe");
         ImGui::TextWrapped("Suppr : supprimer l'objet selectionne");
-        ImGui::TextWrapped("N : ouvrir son Blueprint visuel");
-        ImGui::TextWrapped("F5 ou panneau Jouer : lancer/arreter le jeu");
-        ImGui::TextWrapped("Clic droit + souris : regarder autour, WASD : se deplacer, Q/E : monter/descendre, Shift : plus vite");
+        ImGui::TextWrapped("N : ouvrir son Blueprint");
+        ImGui::TextWrapped("F5 : lancer / arreter le jeu");
+        ImGui::TextWrapped("Clic droit + souris : regarder, WASD : se deplacer, Q/E : monter/descendre, Shift : plus vite");
         ImGui::End();
     }
 
@@ -1332,10 +1496,8 @@ public:
     }
 
     void OpenBlueprintEditor(int index) {
-        SceneObject& obj = m_Objects[index];
-        if (obj.blueprint.empty()) {
-            obj.blueprint = DefaultBlueprint(obj.shape);
-        }
+        // On ne remplit plus automatiquement : chaque objet part d'un
+        // blueprint vide, sinon tous les objets avaient le meme.
         m_ScriptTarget = index;
         m_ShowScriptEditor = true;
         m_SelectedNode = -1;
@@ -1377,6 +1539,14 @@ public:
             n.pos = ImVec2(30.0f, 30.0f + (float)obj.blueprint.size() * 96.0f);
             obj.blueprint.push_back(n);
             m_SelectedNode = (int)obj.blueprint.size() - 1;
+        }
+        if (ImGui::Button("Charger un exemple adapte a ce type d'objet")) {
+            obj.blueprint = DefaultBlueprint(obj.shape);
+            m_SelectedNode = -1;
+        }
+        if (obj.blueprint.empty()) {
+            ImGui::TextDisabled("Blueprint vide : ajoute un bloc, ou clique \"Charger un exemple\" "
+                                "pour partir d'une logique toute faite adaptee a ce type d'objet.");
         }
         ImGui::Separator();
 
@@ -1539,7 +1709,11 @@ private:
     std::vector<SceneObject> m_SavedObjects;   // instantane pris au lancement du jeu
     std::vector<SceneObject> m_PendingSpawns;
     std::unordered_map<std::string, std::unique_ptr<WEngine::Texture>> m_TextureCache;
+    std::unordered_map<std::string, std::unique_ptr<WEngine::Mesh>> m_ModelCache;
     std::vector<std::string> m_AvailableTextures;
+    std::vector<std::string> m_AvailableModels;
+    std::unique_ptr<WEngine::Framebuffer> m_PreviewFB;
+    bool m_PreviewValid = false;
     int m_Selected = -1;
     int m_NextId = 5;
     int m_NewShape = Shape_Cube;
