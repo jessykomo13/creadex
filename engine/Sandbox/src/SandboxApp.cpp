@@ -4,6 +4,7 @@
 #include <string>
 #include <unordered_map>
 #include <cstdio>
+#include <cstdlib>
 #include <cmath>
 #include <filesystem>
 #include <cctype>
@@ -79,59 +80,114 @@ void main() {
 }
 )";
 
-// Blueprint visuel : une chaine de blocs (pas de lignes de code) qu'on
-// glisse dans un canvas, comme les evenements/actions d'Unreal. Chaque
-// objet a sa propre liste de blocs ; l'ordre de la liste = ordre
-// d'execution (pas encore execute automatiquement pendant le jeu, mais
-// c'est bien un editeur visuel, plus du texte).
-struct BlueprintNode {
-    int type = 0;
-    ImVec2 pos{ 0.0f, 0.0f };
-};
+// --- Blueprint : blocs visuels REELLEMENT executes en mode Jouer ------
 
-// Categories a la Unreal : rouge = evenement, or = condition, bleu = action,
-// vert = variable/maths. Grande bibliotheque de blocs (bien plus que les 5
-// de depart) pour couvrir la plupart des besoins d'un jeu simple.
 enum NodeCategory { Cat_Event = 0, Cat_Condition = 1, Cat_Action = 2, Cat_Variable = 3 };
 static const char* CATEGORY_NAMES[] = { "Evenements", "Conditions", "Actions", "Variables / Maths" };
 
-struct NodeTypeInfo { int category; const char* label; const char* shortLabel; ImU32 color; };
+// Ce qu'on peut regler sur un bloc (affiche dans "Details du bloc").
+enum ParamKind {
+    P_NONE = 0,
+    P_AMOUNT,     // a : quantite (vies, force...)
+    P_SECONDS,    // a : duree
+    P_TEXT,       // sparam : texte libre
+    P_KEY,        // sparam : une touche
+    P_COLOR,      // vec : couleur
+    P_VEC,        // vec : position / deplacement
+    P_VAR_NUM,    // sparam + a : nom de variable et valeur
+    P_VAR_RANGE,  // sparam + a + b : variable et intervalle
+    P_THRESHOLD,  // a : seuil
+};
+
+enum NodeType {
+    N_EVT_COLLISION = 0,
+    N_ACT_LOSE_LIFE,
+    N_ACT_KNOCKBACK,
+    N_COND_LIFE_ZERO,
+    N_ACT_RESTART,
+    N_EVT_BEGIN,
+    N_EVT_TICK,
+    N_EVT_KEY,
+    N_COND_LIFE_POS,
+    N_COND_GROUNDED,
+    N_COND_JUMPING,
+    N_COND_VAR_EQ,
+    N_COND_SPEED,
+    N_ACT_GAIN_LIFE,
+    N_ACT_TELEPORT,
+    N_ACT_DESTROY,
+    N_ACT_SPAWN,
+    N_ACT_SOUND,
+    N_ACT_COLOR,
+    N_ACT_GRAVITY_ON,
+    N_ACT_GRAVITY_OFF,
+    N_ACT_FORCE,
+    N_ACT_WAIT,
+    N_ACT_MESSAGE,
+    N_ACT_MOVE,
+    N_ACT_CAM_ACTIVATE,
+    N_ACT_CAM_FOLLOW,
+    N_ACT_SET_TEXT,
+    N_VAR_SET,
+    N_MATH_ADD,
+    N_MATH_SUB,
+    N_MATH_RANDOM,
+};
+
+struct NodeTypeInfo {
+    int category;
+    const char* label;
+    const char* shortLabel;
+    ImU32 color;
+    int param;
+    const char* paramLabel;
+};
+
+// Couleurs a la Unreal : rouge = evenement, or = condition, bleu = action,
+// vert = variable/maths. L'ordre doit suivre exactement l'enum NodeType.
 static const NodeTypeInfo NODE_TYPES[] = {
-    // 0-4 : chaine par defaut a l'ouverture d'un blueprint vide (piege classique)
-    { Cat_Event,     "Evenement : Collision avec le Joueur",   "Collision",   IM_COL32(205, 70, 70, 255) },
-    { Cat_Action,    "Action : -1 Vie",                        "-1 Vie",      IM_COL32(70, 130, 210, 255) },
-    { Cat_Action,    "Action : Repousser le joueur",           "Repousser",   IM_COL32(70, 130, 210, 255) },
-    { Cat_Condition, "Condition : Vie <= 0 ?",                 "Vie<=0?",     IM_COL32(215, 185, 60, 255) },
-    { Cat_Action,    "Action : Redemarrer le niveau",          "Redemarrer",  IM_COL32(70, 130, 210, 255) },
-    // Evenements
-    { Cat_Event,     "Evenement : Debut du jeu",                "Debut jeu",   IM_COL32(205, 70, 70, 255) },
-    { Cat_Event,     "Evenement : Chaque frame (Tick)",         "Tick",        IM_COL32(205, 70, 70, 255) },
-    { Cat_Event,     "Evenement : Touche pressee",              "Touche",      IM_COL32(205, 70, 70, 255) },
-    { Cat_Event,     "Evenement : Cet objet est detruit",       "Detruit",     IM_COL32(205, 70, 70, 255) },
-    // Conditions
-    { Cat_Condition, "Condition : Vie > 0 ?",                   "Vie>0?",      IM_COL32(215, 185, 60, 255) },
-    { Cat_Condition, "Condition : Est au sol ?",                "AuSol?",      IM_COL32(215, 185, 60, 255) },
-    { Cat_Condition, "Condition : Est en train de sauter ?",    "Saute?",      IM_COL32(215, 185, 60, 255) },
-    { Cat_Condition, "Condition : Variable == valeur ?",        "Var==?",      IM_COL32(215, 185, 60, 255) },
-    { Cat_Condition, "Condition : Vitesse > seuil ?",           "Vitesse>?",   IM_COL32(215, 185, 60, 255) },
-    // Actions
-    { Cat_Action,    "Action : +1 Vie",                         "+1 Vie",      IM_COL32(70, 130, 210, 255) },
-    { Cat_Action,    "Action : Teleporter le joueur",           "Teleporter",  IM_COL32(70, 130, 210, 255) },
-    { Cat_Action,    "Action : Detruire cet objet",             "Detruire",    IM_COL32(70, 130, 210, 255) },
-    { Cat_Action,    "Action : Faire apparaitre un objet",      "Spawn",       IM_COL32(70, 130, 210, 255) },
-    { Cat_Action,    "Action : Jouer un son",                   "Son",         IM_COL32(70, 130, 210, 255) },
-    { Cat_Action,    "Action : Changer la couleur",              "Couleur",     IM_COL32(70, 130, 210, 255) },
-    { Cat_Action,    "Action : Activer la gravite",              "Gravite ON",  IM_COL32(70, 130, 210, 255) },
-    { Cat_Action,    "Action : Desactiver la gravite",           "Gravite OFF", IM_COL32(70, 130, 210, 255) },
-    { Cat_Action,    "Action : Appliquer une force",             "Force",       IM_COL32(70, 130, 210, 255) },
-    { Cat_Action,    "Action : Attendre X secondes",             "Attendre",    IM_COL32(70, 130, 210, 255) },
-    { Cat_Action,    "Action : Afficher un message",             "Message",     IM_COL32(70, 130, 210, 255) },
-    { Cat_Action,    "Action : Activer un mecanisme",            "Mecanisme",   IM_COL32(70, 130, 210, 255) },
-    // Variables / Maths
-    { Cat_Variable,  "Variable : Definir une variable",          "Def. var",    IM_COL32(80, 175, 100, 255) },
-    { Cat_Variable,  "Maths : Additionner (A + B)",              "A + B",       IM_COL32(80, 175, 100, 255) },
-    { Cat_Variable,  "Maths : Soustraire (A - B)",                "A - B",       IM_COL32(80, 175, 100, 255) },
-    { Cat_Variable,  "Maths : Nombre aleatoire",                  "Aleatoire",   IM_COL32(80, 175, 100, 255) },
+    { Cat_Event,     "Evenement : Collision avec le Joueur", "Collision",   IM_COL32(205, 70, 70, 255),   P_NONE,      nullptr },
+    { Cat_Action,    "Action : Enlever des vies",            "-Vie",        IM_COL32(70, 130, 210, 255),  P_AMOUNT,    "Vies enlevees" },
+    { Cat_Action,    "Action : Repousser le joueur",         "Repousser",   IM_COL32(70, 130, 210, 255),  P_AMOUNT,    "Force" },
+    { Cat_Condition, "Condition : Vie <= 0 ?",               "Vie<=0?",     IM_COL32(215, 185, 60, 255),  P_NONE,      nullptr },
+    { Cat_Action,    "Action : Redemarrer le niveau",        "Redemarrer",  IM_COL32(70, 130, 210, 255),  P_NONE,      nullptr },
+    { Cat_Event,     "Evenement : Debut du jeu",             "Debut jeu",   IM_COL32(205, 70, 70, 255),   P_NONE,      nullptr },
+    { Cat_Event,     "Evenement : Chaque frame (Tick)",      "Tick",        IM_COL32(205, 70, 70, 255),   P_NONE,      nullptr },
+    { Cat_Event,     "Evenement : Touche pressee",           "Touche",      IM_COL32(205, 70, 70, 255),   P_KEY,       "Touche" },
+    { Cat_Condition, "Condition : Vie > 0 ?",                "Vie>0?",      IM_COL32(215, 185, 60, 255),  P_NONE,      nullptr },
+    { Cat_Condition, "Condition : Est au sol ?",             "AuSol?",      IM_COL32(215, 185, 60, 255),  P_NONE,      nullptr },
+    { Cat_Condition, "Condition : Est en train de sauter ?", "Saute?",      IM_COL32(215, 185, 60, 255),  P_NONE,      nullptr },
+    { Cat_Condition, "Condition : Variable == valeur ?",     "Var==?",      IM_COL32(215, 185, 60, 255),  P_VAR_NUM,   "Variable / valeur" },
+    { Cat_Condition, "Condition : Vitesse verticale > ?",    "Vitesse>?",   IM_COL32(215, 185, 60, 255),  P_THRESHOLD, "Seuil" },
+    { Cat_Action,    "Action : Ajouter des vies",            "+Vie",        IM_COL32(70, 130, 210, 255),  P_AMOUNT,    "Vies ajoutees" },
+    { Cat_Action,    "Action : Teleporter le joueur",        "Teleporter",  IM_COL32(70, 130, 210, 255),  P_VEC,       "Destination" },
+    { Cat_Action,    "Action : Detruire cet objet",          "Detruire",    IM_COL32(70, 130, 210, 255),  P_NONE,      nullptr },
+    { Cat_Action,    "Action : Faire apparaitre un cube",    "Spawn",       IM_COL32(70, 130, 210, 255),  P_VEC,       "Decalage" },
+    { Cat_Action,    "Action : Jouer un son",                "Son",         IM_COL32(70, 130, 210, 255),  P_TEXT,      "Nom du son" },
+    { Cat_Action,    "Action : Changer la couleur",          "Couleur",     IM_COL32(70, 130, 210, 255),  P_COLOR,     "Couleur" },
+    { Cat_Action,    "Action : Activer la gravite",          "Gravite ON",  IM_COL32(70, 130, 210, 255),  P_NONE,      nullptr },
+    { Cat_Action,    "Action : Desactiver la gravite",       "Gravite OFF", IM_COL32(70, 130, 210, 255),  P_NONE,      nullptr },
+    { Cat_Action,    "Action : Propulser le joueur",         "Force",       IM_COL32(70, 130, 210, 255),  P_AMOUNT,    "Force verticale" },
+    { Cat_Action,    "Action : Attendre X secondes",         "Attendre",    IM_COL32(70, 130, 210, 255),  P_SECONDS,   "Secondes" },
+    { Cat_Action,    "Action : Afficher un message",         "Message",     IM_COL32(70, 130, 210, 255),  P_TEXT,      "Message" },
+    { Cat_Action,    "Action : Deplacer cet objet",          "Deplacer",    IM_COL32(70, 130, 210, 255),  P_VEC,       "Deplacement / seconde" },
+    { Cat_Action,    "Action : Activer cette camera",        "Cam ON",      IM_COL32(70, 130, 210, 255),  P_NONE,      nullptr },
+    { Cat_Action,    "Action : Camera suit le joueur",       "Cam suit",    IM_COL32(70, 130, 210, 255),  P_NONE,      nullptr },
+    { Cat_Action,    "Action : Changer le texte",            "Texte",       IM_COL32(70, 130, 210, 255),  P_TEXT,      "Nouveau texte" },
+    { Cat_Variable,  "Variable : Definir une variable",      "Def. var",    IM_COL32(80, 175, 100, 255),  P_VAR_NUM,   "Variable / valeur" },
+    { Cat_Variable,  "Maths : Ajouter a une variable",       "Var + N",     IM_COL32(80, 175, 100, 255),  P_VAR_NUM,   "Variable / valeur" },
+    { Cat_Variable,  "Maths : Soustraire a une variable",    "Var - N",     IM_COL32(80, 175, 100, 255),  P_VAR_NUM,   "Variable / valeur" },
+    { Cat_Variable,  "Maths : Nombre aleatoire",             "Aleatoire",   IM_COL32(80, 175, 100, 255),  P_VAR_RANGE, "Variable / min / max" },
+};
+static const int NODE_TYPE_COUNT = (int)(sizeof(NODE_TYPES) / sizeof(NODE_TYPES[0]));
+
+struct BlueprintNode {
+    int type = 0;
+    ImVec2 pos{ 0.0f, 0.0f };
+    float a = 1.0f;
+    float b = 10.0f;
+    std::string sparam;
+    WEngine::Vec3 vec{ 1.0f, 1.0f, 1.0f };
 };
 
 static const char* SHAPE_NAMES[] = { "Cube", "Sphere", "Cylindre", "Camera", "Texte" };
@@ -149,6 +205,10 @@ struct SceneObject {
     WEngine::Vec3 scale{ 1.0f, 1.0f, 1.0f };
     std::string texturePath; // vide = pas de texture, couleur unie
     std::string text = "Texte"; // utilise seulement si shape == Shape_Text
+
+    // Etat de jeu (remis a zero quand on arrete le jeu)
+    bool destroyed = false;
+    bool touching = false;
 };
 
 static int TextEditCallback(ImGuiInputTextCallbackData* data) {
@@ -170,26 +230,67 @@ static const float GIZMO_HANDLE_RADIUS = 0.4f;
 
 static float Clamp01(float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
 
-// Scene 3D + editeur : viewport libre (camera Unreal-like), selection des
-// objets au clic gauche dans la scene (en plus de l'Outliner), un gizmo de
-// deplacement (fleches X/Y/Z), eclairage temps reel, textures depuis un
-// dossier "assets", des objets Camera/Texte en plus des formes, et un
-// personnage jouable optionnel qui peut sauter sur les plateformes de la
-// scene (n'importe quel objet sert de plateforme, comme dans un editeur).
+// Chaine de blocs mise en pause par un bloc "Attendre".
+struct PendingChain {
+    int objIndex = -1;
+    int nodeIndex = 0;
+    float delay = 0.0f;
+};
+
+struct HudMessage {
+    std::string text;
+    float timeLeft = 0.0f;
+};
+
+// Etat du jeu pendant le mode Jouer (remis a zero a chaque lancement).
+struct PlayState {
+    int life = 3;
+    bool gravity = true;
+    int activeCamera = -1; // index de l'objet Camera qui donne la vue, -1 = suit le joueur
+    std::unordered_map<std::string, float> vars;
+    std::vector<HudMessage> messages;
+};
+
+// Editeur complet : viewport libre, selection/gizmo, eclairage, textures,
+// objets Camera/Texte, personnage jouable, et un Blueprint visuel dont les
+// blocs sont reellement executes quand on lance le jeu.
 class Scene3DLayer : public WEngine::Layer {
 public:
     Scene3DLayer() : Layer("Scene3D") {
         m_Shader = std::make_unique<WEngine::Shader>(VERTEX_SRC, FRAGMENT_SRC);
+        // Emplacements des uniformes recuperes une fois pour toutes : evite
+        // des centaines d'allocations de std::string par frame dans le rendu.
+        m_Shader->Bind();
+        m_LocModel     = m_Shader->GetUniformLocation("u_Model");
+        m_LocNormalMat = m_Shader->GetUniformLocation("u_NormalMatrix");
+        m_LocTint      = m_Shader->GetUniformLocation("u_Tint");
+        m_LocLit       = m_Shader->GetUniformLocation("u_Lit");
+        m_LocUseTex    = m_Shader->GetUniformLocation("u_UseTexture");
+
         m_Cube.reset(WEngine::Mesh::CreateCube());
         m_Sphere.reset(WEngine::Mesh::CreateSphere());
         m_Cylinder.reset(WEngine::Mesh::CreateCylinder());
         m_Grid.reset(WEngine::Mesh::CreateGrid(10, 1.0f));
 
-        m_Objects.push_back({ "Cube 1", {0.0f, 0.5f, 0.0f}, {0.85f,0.35f,0.35f} });
-        m_Objects.push_back({ "Cube 2", {2.5f, 0.5f, -1.5f}, {0.35f,0.65f,0.9f} });
-        m_Objects.push_back({ "Cube 3", {-2.0f, 1.0f, 1.0f}, {0.4f,0.85f,0.55f} });
-        m_Objects.push_back({ "Cube 4", {1.0f, 1.5f, 3.0f}, {0.95f,0.75f,0.25f} });
-        m_Objects.push_back({ "Cube 5", {-3.0f, 0.5f, -2.5f}, {0.7f,0.5f,0.9f} });
+        auto addShape = [&](const char* name, WEngine::Vec3 pos, WEngine::Vec3 tint) -> SceneObject& {
+            SceneObject o;
+            o.name = name;
+            o.position = pos;
+            o.tint = tint;
+            m_Objects.push_back(o);
+            return m_Objects.back();
+        };
+
+        // Piege de demo : son blueprint est deja rempli et fonctionne des
+        // qu'on lance le jeu (marche dessus pour perdre une vie).
+        {
+            SceneObject& trap = addShape("Piege rouge", { 0.0f, 0.5f, 0.0f }, { 0.85f, 0.25f, 0.25f });
+            trap.blueprint = DefaultBlueprint(Shape_Cube);
+        }
+        addShape("Cube 2", { 2.5f, 0.5f, -1.5f }, { 0.35f, 0.65f, 0.9f });
+        addShape("Cube 3", { -2.0f, 1.0f, 1.0f }, { 0.4f, 0.85f, 0.55f });
+        addShape("Cube 4", { 1.0f, 1.5f, 3.0f }, { 0.95f, 0.75f, 0.25f });
+        addShape("Cube 5", { -3.0f, 0.5f, -2.5f }, { 0.7f, 0.5f, 0.9f });
 
         auto addPlatform = [&](const char* name, WEngine::Vec3 pos, WEngine::Vec3 scale) {
             SceneObject p;
@@ -208,8 +309,8 @@ public:
         SceneObject camObj;
         camObj.name = "Camera 1";
         camObj.shape = Shape_Camera;
-        camObj.position = { -4.5f, 1.8f, 0.5f };
-        camObj.rotationEuler = { -8.0f, 20.0f, 0.0f };
+        camObj.position = { -7.0f, 4.0f, 8.0f };   // plan large sur la scene
+        camObj.rotationEuler = { -20.0f, -49.0f, 0.0f };
         m_Objects.push_back(camObj);
 
         SceneObject textObj;
@@ -223,11 +324,48 @@ public:
         RefreshTextureList();
     }
 
+    // --- Blueprints par defaut, adaptes au type d'objet ---------------
+    // (une camera n'a rien a faire avec un piege : elle recoit une chaine
+    // qui la rend reellement utile - elle devient la vue du jeu.)
+    static std::vector<BlueprintNode> DefaultBlueprint(int shape) {
+        std::vector<BlueprintNode> bp;
+        auto add = [&](int type) -> BlueprintNode& {
+            BlueprintNode n;
+            n.type = type;
+            n.pos = ImVec2(30.0f, 30.0f + (float)bp.size() * 96.0f);
+            bp.push_back(n);
+            return bp.back();
+        };
+
+        if (shape == Shape_Camera) {
+            add(N_EVT_BEGIN);
+            add(N_ACT_CAM_ACTIVATE);
+            return bp;
+        }
+        if (shape == Shape_Text) {
+            add(N_EVT_BEGIN);
+            add(N_ACT_SET_TEXT).sparam = "Bienvenue !";
+            return bp;
+        }
+        // Formes solides : le piege classique (collision -> degats -> reset)
+        add(N_EVT_COLLISION);
+        add(N_ACT_LOSE_LIFE).a = 1.0f;
+        add(N_ACT_KNOCKBACK).a = 8.0f;
+        add(N_ACT_MESSAGE).sparam = "Aie ! Piege touche";
+        BlueprintNode& cond = add(N_COND_LIFE_ZERO);
+        (void)cond;
+        add(N_ACT_RESTART);
+        return bp;
+    }
+
     void OnUpdate(WEngine::Timestep ts) override {
         bool uiHasMouse = ImGui::GetIO().WantCaptureMouse;
+        float dt = ts.GetSeconds();
+        if (dt > 0.1f) dt = 0.1f; // evite un saut geant apres une pause
 
         if (m_PlayerMode) {
             UpdatePlayer(ts, uiHasMouse);
+            RunBlueprints(dt);
         } else {
             if (!uiHasMouse) {
                 m_Camera.OnUpdate(ts);
@@ -235,8 +373,8 @@ public:
             UpdatePickingAndGizmo(uiHasMouse);
         }
 
-        m_Time += ts.GetSeconds();
-        m_LastFrameTime = ts.GetSeconds();
+        m_Time += dt;
+        m_LastFrameTime = dt;
 
         WEngine::Renderer::SetClearColor(0.45f, 0.6f, 0.78f, 1.0f);
         WEngine::Renderer::Clear();
@@ -255,16 +393,23 @@ public:
         m_Shader->SetInt("u_Texture", 0);
 
         // Grille : non eclairee, couleur fixe.
-        m_Shader->SetInt("u_Lit", 0);
-        m_Shader->SetInt("u_UseTexture", 0);
-        m_Shader->SetFloat3("u_Tint", 1.0f, 1.0f, 1.0f);
+        m_Shader->SetInt(m_LocLit, 0);
+        m_Shader->SetInt(m_LocUseTex, 0);
+        m_Shader->SetFloat3(m_LocTint, 1.0f, 1.0f, 1.0f);
         SetModel(WEngine::Mat4::Identity());
         m_Grid->Draw();
 
         for (int i = 0; i < (int)m_Objects.size(); i++) {
             auto& obj = m_Objects[i];
+            if (obj.destroyed) continue;
             if (obj.shape == Shape_Text) continue; // rendu en overlay 2D (OnImGuiRender)
-            if (obj.shape == Shape_Camera) { DrawCameraMarker(obj, i == m_Selected); continue; }
+            if (obj.shape == Shape_Camera) {
+                // On ne dessine pas le marqueur de la camera qu'on regarde a
+                // travers, sinon on se retrouve a l'interieur de sa geometrie.
+                if (m_PlayerMode && i == m_Play.activeCamera) continue;
+                DrawCameraMarker(obj, !m_PlayerMode && i == m_Selected);
+                continue;
+            }
 
             WEngine::Mat4 rot = WEngine::Mat4::Multiply(
                 WEngine::Mat4::RotateY(m_Time * obj.rotationSpeed + obj.rotationEuler.y * DEG2RAD),
@@ -276,19 +421,19 @@ public:
                 WEngine::Mat4::Scale(obj.scale)
             );
             WEngine::Vec3 tint = obj.tint;
-            if (i == m_Selected) {
+            if (!m_PlayerMode && i == m_Selected) {
                 tint = { Clamp01(tint.x * 1.25f), Clamp01(tint.y * 1.25f), Clamp01(tint.z * 1.25f) };
             }
 
             WEngine::Texture* tex = obj.texturePath.empty() ? nullptr : GetTexture(obj.texturePath);
-            m_Shader->SetInt("u_Lit", 1);
+            m_Shader->SetInt(m_LocLit, 1);
             if (tex) {
                 tex->Bind(0);
-                m_Shader->SetInt("u_UseTexture", 1);
+                m_Shader->SetInt(m_LocUseTex, 1);
             } else {
-                m_Shader->SetInt("u_UseTexture", 0);
+                m_Shader->SetInt(m_LocUseTex, 0);
             }
-            m_Shader->SetFloat3("u_Tint", tint.x, tint.y, tint.z);
+            m_Shader->SetFloat3(m_LocTint, tint.x, tint.y, tint.z);
             SetModel(model);
             MeshFor(obj.shape)->Draw();
         }
@@ -304,10 +449,10 @@ public:
     }
 
     void SetModel(const WEngine::Mat4& model) {
-        m_Shader->SetMat4("u_Model", model.m);
+        m_Shader->SetMat4(m_LocModel, model.m);
         WEngine::Mat4 normalMat = model;
         normalMat.m[12] = 0.0f; normalMat.m[13] = 0.0f; normalMat.m[14] = 0.0f;
-        m_Shader->SetMat4("u_NormalMatrix", normalMat.m);
+        m_Shader->SetMat4(m_LocNormalMat, normalMat.m);
     }
 
     WEngine::Mesh* MeshFor(int shape) {
@@ -346,9 +491,9 @@ public:
             WEngine::Mat4::Translate(obj.position), WEngine::Mat4::RotateY(obj.rotationEuler.y * DEG2RAD));
         WEngine::Vec3 tint = selected ? WEngine::Vec3(1.0f, 0.95f, 0.4f) : WEngine::Vec3(0.2f, 0.2f, 0.25f);
 
-        m_Shader->SetInt("u_Lit", 0);
-        m_Shader->SetInt("u_UseTexture", 0);
-        m_Shader->SetFloat3("u_Tint", tint.x, tint.y, tint.z);
+        m_Shader->SetInt(m_LocLit, 0);
+        m_Shader->SetInt(m_LocUseTex, 0);
+        m_Shader->SetFloat3(m_LocTint, tint.x, tint.y, tint.z);
 
         WEngine::Mat4 body = WEngine::Mat4::Multiply(base, WEngine::Mat4::Scale({ 0.5f, 0.35f, 0.35f }));
         SetModel(body);
@@ -374,11 +519,311 @@ public:
         return true;
     }
 
+    // ================= Moteur de Blueprint =============================
+
+    void StartPlay() {
+        m_SavedObjects = m_Objects;   // instantane : l'arret restaure tout
+        m_Play = PlayState{};
+        m_Pending.clear();
+
+        for (auto& o : m_Objects) { o.destroyed = false; o.touching = false; }
+
+        m_PlayerSpawn = m_Camera.Position + m_Camera.Forward() * 3.0f;
+        m_PlayerSpawn.y = 1.0f;
+        m_PlayerPos = m_PlayerSpawn;
+        m_PlayerVelY = 0.0f;
+        m_PlayerGrounded = true;
+        m_PlayerMode = true;
+
+        for (int i = 0; i < (int)m_Objects.size(); i++) FireEvent(i, N_EVT_BEGIN);
+        ApplyDeferred();
+    }
+
+    void StopPlay() {
+        m_Objects = m_SavedObjects;   // annule tout ce que les blueprints ont change
+        m_SavedObjects.clear();
+        m_Pending.clear();
+        m_Play = PlayState{};
+        m_PlayerMode = false;
+        if (m_Selected >= (int)m_Objects.size()) m_Selected = -1;
+        if (m_ScriptTarget >= (int)m_Objects.size()) { m_ScriptTarget = -1; m_ShowScriptEditor = false; }
+    }
+
+    void TogglePlay() {
+        if (m_PlayerMode) StopPlay(); else StartPlay();
+    }
+
+    void AddMessage(const std::string& text) {
+        m_Play.messages.push_back({ text, 4.0f });
+        if (m_Play.messages.size() > 6) m_Play.messages.erase(m_Play.messages.begin());
+    }
+
+    bool PlayerTouches(const SceneObject& obj) const {
+        if (obj.shape == Shape_Camera || obj.shape == Shape_Text) return false;
+        // Marge un peu plus large que celle du blocage (CollidesAt), sinon le
+        // joueur s'arrete pile au bord sans jamais "toucher" l'objet.
+        const float TOUCH_MARGIN = 0.15f;
+        float halfX = std::fabs(obj.scale.x) * 0.5f + PLAYER_RADIUS + TOUCH_MARGIN;
+        float halfZ = std::fabs(obj.scale.z) * 0.5f + PLAYER_RADIUS + TOUCH_MARGIN;
+        float minY = obj.position.y - std::fabs(obj.scale.y) * 0.5f - 0.2f;
+        float maxY = obj.position.y + std::fabs(obj.scale.y) * 0.5f + 0.2f;
+        float feet = m_PlayerPos.y - PLAYER_HALF_HEIGHT;
+        float head = m_PlayerPos.y + PLAYER_HALF_HEIGHT;
+        if (head < minY || feet > maxY) return false;
+        return m_PlayerPos.x > obj.position.x - halfX && m_PlayerPos.x < obj.position.x + halfX &&
+               m_PlayerPos.z > obj.position.z - halfZ && m_PlayerPos.z < obj.position.z + halfZ;
+    }
+
+    void RunBlueprints(float dt) {
+        // 1. Chaines en attente (bloc "Attendre X secondes")
+        for (int i = (int)m_Pending.size() - 1; i >= 0; i--) {
+            m_Pending[i].delay -= dt;
+            if (m_Pending[i].delay <= 0.0f) {
+                PendingChain p = m_Pending[i];
+                m_Pending.erase(m_Pending.begin() + i);
+                if (p.objIndex >= 0 && p.objIndex < (int)m_Objects.size() && !m_Objects[p.objIndex].destroyed) {
+                    RunChain(p.objIndex, p.nodeIndex);
+                }
+            }
+        }
+
+        // 2. Tick + collisions
+        m_FrameDt = dt;
+        for (int i = 0; i < (int)m_Objects.size(); i++) {
+            if (m_Objects[i].destroyed) continue;
+            FireEvent(i, N_EVT_TICK);
+        }
+        for (int i = 0; i < (int)m_Objects.size(); i++) {
+            if (m_Objects[i].destroyed) continue;
+            bool now = PlayerTouches(m_Objects[i]);
+            bool before = m_Objects[i].touching;
+            m_Objects[i].touching = now;
+            if (now && !before) FireEvent(i, N_EVT_COLLISION);
+        }
+
+        ApplyDeferred();
+
+        // 3. Messages du HUD qui s'effacent
+        for (int i = (int)m_Play.messages.size() - 1; i >= 0; i--) {
+            m_Play.messages[i].timeLeft -= dt;
+            if (m_Play.messages[i].timeLeft <= 0.0f) m_Play.messages.erase(m_Play.messages.begin() + i);
+        }
+
+        // 4. La vue suit la camera active, sinon le personnage
+        if (m_Play.activeCamera >= 0 && m_Play.activeCamera < (int)m_Objects.size()) {
+            const SceneObject& cam = m_Objects[m_Play.activeCamera];
+            if (cam.shape == Shape_Camera && !cam.destroyed) {
+                m_Camera.Position = cam.position;
+                m_Camera.Yaw = cam.rotationEuler.y;
+                m_Camera.Pitch = cam.rotationEuler.x;
+            } else {
+                m_Play.activeCamera = -1;
+            }
+        }
+    }
+
+    // Les actions qui changent la liste d'objets sont differees pour ne pas
+    // invalider les boucles d'evenements en cours.
+    void ApplyDeferred() {
+        if (!m_PendingSpawns.empty()) {
+            // Garde-fou : un "Tick -> Spawn" ferait grossir la scene a l'infini
+            // et donnerait l'impression que le moteur rame.
+            for (auto& s : m_PendingSpawns) {
+                if ((int)m_Objects.size() >= MAX_OBJECTS) {
+                    AddMessage("Limite d'objets atteinte (" + std::to_string(MAX_OBJECTS) + ")");
+                    break;
+                }
+                m_Objects.push_back(s);
+            }
+            m_PendingSpawns.clear();
+        }
+        if (m_RestartRequested) {
+            m_RestartRequested = false;
+            m_Objects = m_SavedObjects;
+            for (auto& o : m_Objects) { o.destroyed = false; o.touching = false; }
+            m_Pending.clear();
+            m_Play.life = 3;
+            m_Play.vars.clear();
+            m_Play.activeCamera = -1;
+            m_PlayerPos = m_PlayerSpawn;
+            m_PlayerVelY = 0.0f;
+            m_PlayerGrounded = true;
+            AddMessage("Niveau redemarre");
+            if (m_Selected >= (int)m_Objects.size()) m_Selected = -1;
+            if (m_ScriptTarget >= (int)m_Objects.size()) { m_ScriptTarget = -1; m_ShowScriptEditor = false; }
+        }
+    }
+
+    bool KeyMatches(const std::string& s, int keyCode) const {
+        char c = s.empty() ? 'E' : (char)std::toupper((unsigned char)s[0]);
+        if (c >= 'A' && c <= 'Z') return keyCode == (GLFW_KEY_A + (c - 'A'));
+        if (c >= '0' && c <= '9') return keyCode == (GLFW_KEY_0 + (c - '0'));
+        return false;
+    }
+
+    void FireEvent(int objIndex, int eventType, int keyCode = -1) {
+        if (objIndex < 0 || objIndex >= (int)m_Objects.size()) return;
+        // copie des indices d'abord : la chaine peut modifier la scene
+        std::vector<int> starts;
+        const auto& bp = m_Objects[objIndex].blueprint;
+        for (int i = 0; i < (int)bp.size(); i++) {
+            if (bp[i].type != eventType) continue;
+            if (eventType == N_EVT_KEY && !KeyMatches(bp[i].sparam, keyCode)) continue;
+            starts.push_back(i + 1);
+        }
+        for (int s : starts) RunChain(objIndex, s);
+    }
+
+    // Execute a partir d'un bloc jusqu'a : la fin, le prochain evenement,
+    // une condition fausse, ou une attente.
+    void RunChain(int objIndex, int start) {
+        for (int i = start;; i++) {
+            if (objIndex < 0 || objIndex >= (int)m_Objects.size()) return;
+            if (m_Objects[objIndex].destroyed) return;
+            if (i >= (int)m_Objects[objIndex].blueprint.size()) return;
+
+            BlueprintNode node = m_Objects[objIndex].blueprint[i]; // copie : l'action peut modifier le vecteur
+            if (node.type < 0 || node.type >= NODE_TYPE_COUNT) return;
+            int cat = NODE_TYPES[node.type].category;
+
+            if (cat == Cat_Event) return;               // debut d'une autre chaine
+            if (cat == Cat_Condition) {
+                if (!EvalCondition(node)) return;       // condition fausse : on arrete la
+                continue;
+            }
+            if (node.type == N_ACT_WAIT) {
+                // Garde-fou : "Tick -> Attendre" empilerait une chaine par frame.
+                if ((int)m_Pending.size() < MAX_PENDING) {
+                    m_Pending.push_back({ objIndex, i + 1, node.a > 0.0f ? node.a : 1.0f });
+                }
+                return;
+            }
+            if (!RunAction(objIndex, node)) return;
+        }
+    }
+
+    bool EvalCondition(const BlueprintNode& node) {
+        switch (node.type) {
+            case N_COND_LIFE_ZERO: return m_Play.life <= 0;
+            case N_COND_LIFE_POS:  return m_Play.life > 0;
+            case N_COND_GROUNDED:  return m_PlayerGrounded;
+            case N_COND_JUMPING:   return !m_PlayerGrounded && m_PlayerVelY > 0.0f;
+            case N_COND_SPEED:     return std::fabs(m_PlayerVelY) > node.a;
+            case N_COND_VAR_EQ: {
+                auto it = m_Play.vars.find(node.sparam);
+                float v = (it == m_Play.vars.end()) ? 0.0f : it->second;
+                return std::fabs(v - node.a) < 0.0001f;
+            }
+            default: return true;
+        }
+    }
+
+    // Renvoie false pour arreter la chaine (objet detruit, niveau relance...).
+    bool RunAction(int objIndex, const BlueprintNode& node) {
+        SceneObject& obj = m_Objects[objIndex];
+        switch (node.type) {
+            case N_ACT_LOSE_LIFE: {
+                int amount = (int)(node.a > 0.0f ? node.a : 1.0f);
+                m_Play.life -= amount;
+                AddMessage("-" + std::to_string(amount) + " vie (reste " + std::to_string(m_Play.life) + ")");
+                break;
+            }
+            case N_ACT_GAIN_LIFE: {
+                int amount = (int)(node.a > 0.0f ? node.a : 1.0f);
+                m_Play.life += amount;
+                AddMessage("+" + std::to_string(amount) + " vie (total " + std::to_string(m_Play.life) + ")");
+                break;
+            }
+            case N_ACT_KNOCKBACK: {
+                float force = node.a > 0.0f ? node.a : 8.0f;
+                m_PlayerVelY = force;
+                m_PlayerGrounded = false;
+                WEngine::Vec3 away = (m_PlayerPos - obj.position);
+                away.y = 0.0f;
+                away = away.Normalized();
+                m_PlayerPos = m_PlayerPos + away * 0.8f;
+                break;
+            }
+            case N_ACT_FORCE:
+                m_PlayerVelY += node.a;
+                m_PlayerGrounded = false;
+                break;
+            case N_ACT_TELEPORT:
+                m_PlayerPos = node.vec;
+                m_PlayerVelY = 0.0f;
+                break;
+            case N_ACT_RESTART:
+                m_RestartRequested = true;
+                return false;
+            case N_ACT_DESTROY:
+                obj.destroyed = true;
+                if (m_Play.activeCamera == objIndex) m_Play.activeCamera = -1;
+                return false;
+            case N_ACT_SPAWN: {
+                SceneObject s;
+                s.name = "Spawn " + std::to_string(++m_NextId);
+                s.position = obj.position + node.vec;
+                s.tint = { 0.9f, 0.9f, 0.4f };
+                m_PendingSpawns.push_back(s);
+                break;
+            }
+            case N_ACT_SOUND:
+                // Pas encore de moteur audio : on affiche la note a l'ecran.
+                AddMessage("[son] " + (node.sparam.empty() ? std::string("bip") : node.sparam));
+                break;
+            case N_ACT_COLOR:
+                obj.tint = node.vec;
+                break;
+            case N_ACT_GRAVITY_ON:  m_Play.gravity = true;  break;
+            case N_ACT_GRAVITY_OFF: m_Play.gravity = false; break;
+            case N_ACT_MESSAGE:
+                AddMessage(node.sparam.empty() ? obj.name : node.sparam);
+                break;
+            case N_ACT_MOVE:
+                obj.position = obj.position + node.vec * m_FrameDt;
+                break;
+            case N_ACT_CAM_ACTIVATE:
+                if (obj.shape == Shape_Camera) {
+                    m_Play.activeCamera = objIndex;
+                    AddMessage("Vue : " + obj.name);
+                } else {
+                    AddMessage("\"Activer cette camera\" ne marche que sur un objet Camera");
+                }
+                break;
+            case N_ACT_CAM_FOLLOW:
+                m_Play.activeCamera = -1;
+                AddMessage("Vue : le personnage");
+                break;
+            case N_ACT_SET_TEXT:
+                obj.text = node.sparam.empty() ? obj.text : node.sparam;
+                break;
+            case N_VAR_SET:
+                m_Play.vars[node.sparam] = node.a;
+                break;
+            case N_MATH_ADD:
+                m_Play.vars[node.sparam] += node.a;
+                break;
+            case N_MATH_SUB:
+                m_Play.vars[node.sparam] -= node.a;
+                break;
+            case N_MATH_RANDOM: {
+                float lo = node.a, hi = node.b;
+                if (hi < lo) std::swap(lo, hi);
+                float t = (float)std::rand() / (float)RAND_MAX;
+                m_Play.vars[node.sparam] = lo + t * (hi - lo);
+                break;
+            }
+            default: break;
+        }
+        return true;
+    }
+
     // ---- Personnage jouable : mouvement, saut, animation procedurale ----
 
     float SurfaceHeightAt(float x, float z, float refY) {
         float best = 0.0f; // sol de base (grille, y=0)
         for (auto& obj : m_Objects) {
+            if (obj.destroyed) continue;
             if (obj.shape == Shape_Camera || obj.shape == Shape_Text) continue;
             float halfX = std::fabs(obj.scale.x) * 0.5f, halfZ = std::fabs(obj.scale.z) * 0.5f;
             if (x >= obj.position.x - halfX && x <= obj.position.x + halfX &&
@@ -392,6 +837,8 @@ public:
 
     static constexpr float PLAYER_RADIUS = 0.35f;
     static constexpr float PLAYER_HALF_HEIGHT = 1.0f;
+    static constexpr int MAX_OBJECTS = 400;
+    static constexpr int MAX_PENDING = 256;
 
     // Bloque le joueur devant les cotes des objets (au lieu de les
     // traverser) : ignore un objet si le joueur a deja les pieds au niveau
@@ -400,6 +847,7 @@ public:
         float feet = centerY - PLAYER_HALF_HEIGHT;
         float head = centerY + PLAYER_HALF_HEIGHT;
         for (auto& obj : m_Objects) {
+            if (obj.destroyed) continue;
             if (obj.shape == Shape_Camera || obj.shape == Shape_Text) continue;
             float halfX = std::fabs(obj.scale.x) * 0.5f + PLAYER_RADIUS;
             float halfZ = std::fabs(obj.scale.z) * 0.5f + PLAYER_RADIUS;
@@ -416,7 +864,8 @@ public:
     }
 
     void UpdatePlayer(WEngine::Timestep ts, bool uiHasMouse) {
-        if (!uiHasMouse) {
+        bool freeLook = (m_Play.activeCamera < 0); // une camera active pilote la vue
+        if (!uiHasMouse && freeLook) {
             m_Camera.OnUpdateLookOnly(ts);
         }
 
@@ -448,16 +897,20 @@ public:
             m_PlayerVelY = JUMP_SPEED;
             m_PlayerGrounded = false;
         }
-        m_PlayerVelY -= GRAVITY * ts.GetSeconds();
+        if (m_Play.gravity) {
+            m_PlayerVelY -= GRAVITY * ts.GetSeconds();
+        } else {
+            m_PlayerVelY = 0.0f;
+        }
         float feetBefore = m_PlayerPos.y - PLAYER_HALF_HEIGHT;
         m_PlayerPos.y += m_PlayerVelY * ts.GetSeconds();
         float feetAfter = m_PlayerPos.y - PLAYER_HALF_HEIGHT;
         float ground = SurfaceHeightAt(m_PlayerPos.x, m_PlayerPos.z, feetBefore);
-        if (feetAfter <= ground) {
+        if (m_Play.gravity && feetAfter <= ground) {
             m_PlayerPos.y = ground + PLAYER_HALF_HEIGHT;
             m_PlayerVelY = 0.0f;
             m_PlayerGrounded = true;
-        } else {
+        } else if (m_Play.gravity) {
             m_PlayerGrounded = false;
         }
         if (!wasGrounded && m_PlayerGrounded) m_SquashTimer = 0.15f;
@@ -466,16 +919,18 @@ public:
             if (m_SquashTimer < 0.0f) m_SquashTimer = 0.0f;
         }
 
-        WEngine::Vec3 camOffset = m_Camera.Forward() * -5.0f + WEngine::Vec3(0.0f, 2.0f, 0.0f);
-        m_Camera.Position = m_PlayerPos + camOffset;
+        if (freeLook) {
+            WEngine::Vec3 camOffset = m_Camera.Forward() * -5.0f + WEngine::Vec3(0.0f, 2.0f, 0.0f);
+            m_Camera.Position = m_PlayerPos + camOffset;
+        }
     }
 
     void DrawPart(const WEngine::Mat4& base, WEngine::Vec3 localPos, WEngine::Vec3 scale, WEngine::Vec3 tint, WEngine::Mesh* mesh) {
         WEngine::Mat4 model = WEngine::Mat4::Multiply(base,
             WEngine::Mat4::Multiply(WEngine::Mat4::Translate(localPos), WEngine::Mat4::Scale(scale)));
-        m_Shader->SetInt("u_Lit", 1);
-        m_Shader->SetInt("u_UseTexture", 0);
-        m_Shader->SetFloat3("u_Tint", tint.x, tint.y, tint.z);
+        m_Shader->SetInt(m_LocLit, 1);
+        m_Shader->SetInt(m_LocUseTex, 0);
+        m_Shader->SetFloat3(m_LocTint, tint.x, tint.y, tint.z);
         SetModel(model);
         mesh->Draw();
     }
@@ -485,9 +940,9 @@ public:
             WEngine::Mat4::Multiply(WEngine::Mat4::Translate(pivotLocal),
             WEngine::Mat4::Multiply(WEngine::Mat4::RotateX(angleRad),
             WEngine::Mat4::Multiply(WEngine::Mat4::Translate({ 0.0f, -length * 0.5f, 0.0f }), WEngine::Mat4::Scale({ thickness, length, thickness })))));
-        m_Shader->SetInt("u_Lit", 1);
-        m_Shader->SetInt("u_UseTexture", 0);
-        m_Shader->SetFloat3("u_Tint", tint.x, tint.y, tint.z);
+        m_Shader->SetInt(m_LocLit, 1);
+        m_Shader->SetInt(m_LocUseTex, 0);
+        m_Shader->SetFloat3(m_LocTint, tint.x, tint.y, tint.z);
         SetModel(model);
         m_Cylinder->Draw();
     }
@@ -522,8 +977,8 @@ public:
     // ---- Gizmo de deplacement ----
 
     void DrawGizmo(const WEngine::Vec3& pos) {
-        m_Shader->SetInt("u_Lit", 0);
-        m_Shader->SetInt("u_UseTexture", 0);
+        m_Shader->SetInt(m_LocLit, 0);
+        m_Shader->SetInt(m_LocUseTex, 0);
         DrawAxisArrow(pos, AXIS_X, 0.95f, 0.25f, 0.25f);
         DrawAxisArrow(pos, AXIS_Y, 0.25f, 0.95f, 0.3f);
         DrawAxisArrow(pos, AXIS_Z, 0.3f, 0.45f, 0.95f);
@@ -538,7 +993,7 @@ public:
             axis.z != 0.0f ? shaftLen : thick);
         WEngine::Vec3 shaftPos = origin + axis * (shaftLen * 0.5f);
         WEngine::Mat4 shaftModel = WEngine::Mat4::Multiply(WEngine::Mat4::Translate(shaftPos), WEngine::Mat4::Scale(shaftScale));
-        m_Shader->SetFloat3("u_Tint", r, g, b);
+        m_Shader->SetFloat3(m_LocTint, r, g, b);
         SetModel(shaftModel);
         m_Cube->Draw();
 
@@ -562,7 +1017,7 @@ public:
         m_LeftWasDown = leftDown;
 
         if (m_DraggingAxis >= 0) {
-            if (!leftDown) {
+            if (!leftDown || m_Selected < 0 || m_Selected >= (int)m_Objects.size()) {
                 m_DraggingAxis = -1;
             } else {
                 WEngine::Vec3 axis = m_DraggingAxis == 0 ? AXIS_X : (m_DraggingAxis == 1 ? AXIS_Y : AXIS_Z);
@@ -578,7 +1033,6 @@ public:
         }
 
         if (!justPressed) return;
-
 
         if (m_Selected >= 0 && m_Selected < (int)m_Objects.size()) {
             const WEngine::Vec3& objPos = m_Objects[m_Selected].position;
@@ -608,7 +1062,7 @@ public:
 
         float bestT = 1e9f; int bestObj = -1;
         for (int i = 0; i < (int)m_Objects.size(); i++) {
-            if (m_Objects[i].shape == Shape_Text) continue;
+            if (m_Objects[i].destroyed || m_Objects[i].shape == Shape_Text) continue;
             float t;
             if (WEngine::RaySphereIntersect(ray, m_Objects[i].position, m_Objects[i].pickRadius, t) && t < bestT) {
                 bestT = t; bestObj = i;
@@ -617,17 +1071,34 @@ public:
         m_Selected = bestObj;
     }
 
-    // ---- Interface ----
+    // ================= Interface ======================================
 
     void OnImGuiRender() override {
+        DrawOutliner();
+        DrawInspector();
+        DrawTexturesPanel();
+
+        if (m_ShowScriptEditor && m_ScriptTarget >= 0 && m_ScriptTarget < (int)m_Objects.size()) {
+            DrawBlueprintEditor(m_Objects[m_ScriptTarget]);
+        }
+
+        DrawPlayPanel();
+        DrawStatsPanel();
+        DrawWorldOverlay();
+    }
+
+    void DrawOutliner() {
         ImGui::Begin("Outliner");
         ImGui::TextDisabled("%d objets", (int)m_Objects.size());
         ImGui::Separator();
         for (int i = 0; i < (int)m_Objects.size(); i++) {
             bool selected = (m_Selected == i);
-            if (ImGui::Selectable(m_Objects[i].name.c_str(), selected)) {
-                m_Selected = i;
-            }
+            std::string label = m_Objects[i].name;
+            if (m_Objects[i].destroyed) label += "  (detruit)";
+            if (!m_Objects[i].blueprint.empty()) label += "   [BP]";
+            ImGui::PushID(i);
+            if (ImGui::Selectable(label.c_str(), selected)) m_Selected = i;
+            ImGui::PopID();
         }
         ImGui::Separator();
         ImGui::Combo("Forme", &m_NewShape, SHAPE_NAMES, IM_ARRAYSIZE(SHAPE_NAMES));
@@ -643,7 +1114,9 @@ public:
             m_Selected = (int)m_Objects.size() - 1;
         }
         ImGui::End();
+    }
 
+    void DrawInspector() {
         ImGui::Begin("Inspecteur");
         if (m_Selected >= 0 && m_Selected < (int)m_Objects.size()) {
             SceneObject& obj = m_Objects[m_Selected];
@@ -663,7 +1136,7 @@ public:
                 }
                 ImGui::EndDisabled();
                 if (m_PlayerMode) {
-                    ImGui::TextDisabled("Disponible en mode edition (arrete le jeu avec F5).");
+                    ImGui::TextDisabled("En jeu : utilise le bloc \"Activer cette camera\".");
                 }
             } else {
                 ImGui::DragFloat3("Rotation (deg)", &obj.rotationEuler.x, 0.5f);
@@ -688,7 +1161,10 @@ public:
             }
 
             ImGui::Separator();
-            if (ImGui::Button("Blueprint visuel (N)", ImVec2(-1, 0))) {
+            std::string bpLabel = obj.blueprint.empty()
+                ? "Blueprint visuel (N)"
+                : "Blueprint visuel (N) - " + std::to_string(obj.blueprint.size()) + " blocs";
+            if (ImGui::Button(bpLabel.c_str(), ImVec2(-1, 0))) {
                 OpenBlueprintEditor(m_Selected);
             }
             ImGui::Separator();
@@ -699,7 +1175,9 @@ public:
             ImGui::TextDisabled("Selectionne un objet dans l'Outliner ou clique dessus dans la scene.");
         }
         ImGui::End();
+    }
 
+    void DrawTexturesPanel() {
         ImGui::Begin("Textures");
         ImGui::TextWrapped("Depose des images (.png/.jpg/.bmp) dans le dossier \"assets\" a cote de l'executable, puis Rafraichir. Clique une image pour l'appliquer a l'objet selectionne.");
         if (ImGui::Button("Rafraichir", ImVec2(-1, 0))) RefreshTextureList();
@@ -721,37 +1199,45 @@ public:
             }
         }
         ImGui::End();
+    }
 
-        if (m_ShowScriptEditor && m_ScriptTarget >= 0 && m_ScriptTarget < (int)m_Objects.size()) {
-            DrawBlueprintEditor(m_Objects[m_ScriptTarget]);
-        }
-
+    void DrawPlayPanel() {
         ImGui::Begin("Jouer");
-        {
-            bool wasOn = m_PlayerMode;
-            ImVec4 col = m_PlayerMode ? ImVec4(0.75f, 0.2f, 0.2f, 1.0f) : ImVec4(0.2f, 0.65f, 0.25f, 1.0f);
-            ImGui::PushStyleColor(ImGuiCol_Button, col);
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, col);
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, col);
-            if (ImGui::Button(m_PlayerMode ? "■  Arreter (F5)" : "▶  Lancer le jeu (F5)", ImVec2(-1, 48))) {
-                m_PlayerMode = !m_PlayerMode;
-            }
-            ImGui::PopStyleColor(3);
-            if (m_PlayerMode && !wasOn) {
-                m_PlayerPos = m_Camera.Position + m_Camera.Forward() * 3.0f;
-                m_PlayerPos.y = 1.0f;
-                m_PlayerVelY = 0.0f;
-                m_PlayerGrounded = true;
-            }
+        ImVec4 col = m_PlayerMode ? ImVec4(0.75f, 0.2f, 0.2f, 1.0f) : ImVec4(0.2f, 0.65f, 0.25f, 1.0f);
+        ImGui::PushStyleColor(ImGuiCol_Button, col);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, col);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, col);
+        if (ImGui::Button(m_PlayerMode ? "Arreter (F5)" : "Lancer le jeu (F5)", ImVec2(-1, 44))) {
+            TogglePlay();
         }
+        ImGui::PopStyleColor(3);
         ImGui::Separator();
+
         if (m_PlayerMode) {
-            ImGui::TextWrapped("WASD : marcher, Espace : sauter, Clic droit + souris : orbiter la camera. Tous les objets de la scene servent de plateformes.");
+            ImGui::Text("Vie : %d", m_Play.life);
+            ImGui::SameLine();
+            ImGui::Text("| Gravite : %s", m_Play.gravity ? "ON" : "OFF");
+            if (m_Play.activeCamera >= 0 && m_Play.activeCamera < (int)m_Objects.size()) {
+                ImGui::Text("Vue : %s (bloc \"Activer cette camera\")", m_Objects[m_Play.activeCamera].name.c_str());
+            } else {
+                ImGui::Text("Vue : le personnage");
+            }
+            if (!m_Play.vars.empty()) {
+                ImGui::Separator();
+                ImGui::TextDisabled("Variables :");
+                for (auto& kv : m_Play.vars) {
+                    ImGui::Text("  %s = %.2f", kv.first.c_str(), kv.second);
+                }
+            }
+            ImGui::Separator();
+            ImGui::TextWrapped("WASD : marcher, Espace : sauter, clic droit + souris : orbiter la camera. Les blueprints des objets tournent pour de vrai.");
         } else {
-            ImGui::TextWrapped("Personnage jouable pre-fabrique (deplacement + saut + animation + camera 3e personne), code deja ecrit pour gagner du temps.");
+            ImGui::TextWrapped("Lance le jeu pour executer les Blueprints des objets. Tout ce qu'ils changent (couleur, objets detruits, vies) est annule quand tu arretes.");
         }
         ImGui::End();
+    }
 
+    void DrawStatsPanel() {
         ImGui::Begin("Stats");
         ImGui::Text("FPS: %.0f", m_LastFrameTime > 0.0f ? 1.0f / m_LastFrameTime : 0.0f);
         ImGui::Text("Camera pos: %.1f, %.1f, %.1f", m_Camera.Position.x, m_Camera.Position.y, m_Camera.Position.z);
@@ -762,13 +1248,15 @@ public:
         ImGui::TextWrapped("N : ouvrir son Blueprint visuel");
         ImGui::TextWrapped("F5 ou panneau Jouer : lancer/arreter le jeu");
         ImGui::TextWrapped("Clic droit + souris : regarder autour, WASD : se deplacer, Q/E : monter/descendre, Shift : plus vite");
-        ImGui::TextWrapped("Ces panneaux se deplacent et s'arriment ou tu veux (tire un titre).");
         ImGui::End();
+    }
 
-        // Labels "Texte" projetes du monde 3D vers l'ecran, par-dessus tout le reste.
+    // Labels "Texte" du monde 3D + HUD du jeu, dessines par-dessus tout.
+    void DrawWorldOverlay() {
         ImDrawList* fg = ImGui::GetForegroundDrawList();
+
         for (auto& obj : m_Objects) {
-            if (obj.shape != Shape_Text) continue;
+            if (obj.destroyed || obj.shape != Shape_Text) continue;
             ImVec2 screen;
             if (!WorldToScreen(obj.position, screen)) continue;
             float size = 18.0f * (obj.scale.x > 0.2f ? obj.scale.x : 1.0f);
@@ -778,36 +1266,60 @@ public:
             fg->AddText(nullptr, size, ImVec2(pos.x + 1, pos.y + 1), IM_COL32(0, 0, 0, 180), obj.text.c_str());
             fg->AddText(nullptr, size, pos, col, obj.text.c_str());
         }
+
+        if (!m_PlayerMode) return;
+
+        // HUD : vies + messages des blueprints
+        float x = m_ViewportW * 0.5f - 60.0f, y = 24.0f;
+        char lifeBuf[64];
+        snprintf(lifeBuf, sizeof(lifeBuf), "Vie : %d", m_Play.life);
+        fg->AddText(nullptr, 30.0f, ImVec2(x + 2, y + 2), IM_COL32(0, 0, 0, 200), lifeBuf);
+        fg->AddText(nullptr, 30.0f, ImVec2(x, y),
+            m_Play.life > 0 ? IM_COL32(255, 240, 120, 255) : IM_COL32(255, 90, 90, 255), lifeBuf);
+
+        float my = y + 42.0f;
+        for (auto& msg : m_Play.messages) {
+            int alpha = (int)(255.0f * Clamp01(msg.timeLeft / 1.5f));
+            fg->AddText(nullptr, 20.0f, ImVec2(x + 1, my + 1), IM_COL32(0, 0, 0, alpha), msg.text.c_str());
+            fg->AddText(nullptr, 20.0f, ImVec2(x, my), IM_COL32(255, 255, 255, alpha), msg.text.c_str());
+            my += 24.0f;
+        }
     }
 
     void OnEvent(WEngine::Event& event) override {
-        if (event.GetEventType() == WEngine::EventType::KeyPressed) {
-            auto& e = static_cast<WEngine::KeyPressedEvent&>(event);
-            constexpr int KEY_ESCAPE = 256;
-            constexpr int KEY_DELETE = 261;
-            constexpr int KEY_N = 78;
-            constexpr int KEY_F5 = 294;
-            bool typing = ImGui::GetIO().WantTextInput;
+        if (event.GetEventType() != WEngine::EventType::KeyPressed) return;
+        auto& e = static_cast<WEngine::KeyPressedEvent&>(event);
+        constexpr int KEY_ESCAPE = 256;
+        constexpr int KEY_DELETE = 261;
+        constexpr int KEY_N = 78;
+        constexpr int KEY_F5 = 294;
+        bool typing = ImGui::GetIO().WantTextInput;
 
-            if (e.GetKeyCode() == KEY_ESCAPE) {
-                WEngine::Application::Get().Close();
+        if (e.GetKeyCode() == KEY_ESCAPE) {
+            WEngine::Application::Get().Close();
+            return;
+        }
+        if (e.GetKeyCode() == KEY_F5 && !e.IsRepeat()) {
+            TogglePlay();
+            return;
+        }
+        if (typing || e.IsRepeat()) return;
+
+        if (m_PlayerMode) {
+            // Les blocs "Evenement : Touche pressee" recoivent la touche.
+            for (int i = 0; i < (int)m_Objects.size(); i++) {
+                if (m_Objects[i].destroyed) continue;
+                FireEvent(i, N_EVT_KEY, e.GetKeyCode());
             }
-            if (e.GetKeyCode() == KEY_N && !e.IsRepeat() && !typing
-                && m_Selected >= 0 && m_Selected < (int)m_Objects.size()) {
-                OpenBlueprintEditor(m_Selected);
-            }
-            if (e.GetKeyCode() == KEY_DELETE && !e.IsRepeat() && !typing) {
-                DeleteSelected();
-            }
-            if (e.GetKeyCode() == KEY_F5 && !e.IsRepeat()) {
-                m_PlayerMode = !m_PlayerMode;
-                if (m_PlayerMode) {
-                    m_PlayerPos = m_Camera.Position + m_Camera.Forward() * 3.0f;
-                    m_PlayerPos.y = 1.0f;
-                    m_PlayerVelY = 0.0f;
-                    m_PlayerGrounded = true;
-                }
-            }
+            ApplyDeferred();
+            return;
+        }
+
+        if (e.GetKeyCode() == KEY_N && m_Selected >= 0 && m_Selected < (int)m_Objects.size()) {
+            OpenBlueprintEditor(m_Selected);
+        }
+        if (e.GetKeyCode() == KEY_DELETE) {
+            DeleteSelected();
         }
     }
 
@@ -816,32 +1328,27 @@ public:
         m_Objects.erase(m_Objects.begin() + m_Selected);
         m_Selected = -1;
         m_ShowScriptEditor = false;
+        m_ScriptTarget = -1;
     }
 
     void OpenBlueprintEditor(int index) {
         SceneObject& obj = m_Objects[index];
         if (obj.blueprint.empty()) {
-            for (int i = 0; i < IM_ARRAYSIZE(NODE_TYPES); i++) {
-                BlueprintNode n;
-                n.type = i;
-                n.pos = ImVec2(30.0f, 30.0f + (float)i * 96.0f);
-                obj.blueprint.push_back(n);
-            }
+            obj.blueprint = DefaultBlueprint(obj.shape);
         }
         m_ScriptTarget = index;
         m_ShowScriptEditor = true;
+        m_SelectedNode = -1;
     }
 
     // Editeur de logique visuel a base de blocs : glisser-deposer, pas de
-    // ligne de code. L'ordre des blocs dans la liste = ordre d'execution
-    // (represente par les fleches entre eux). Pas encore execute
-    // automatiquement pendant le jeu.
+    // ligne de code. L'ordre des blocs = ordre d'execution (fleches).
     void DrawBlueprintEditor(SceneObject& obj) {
         std::string title = "Blueprint - " + obj.name;
-        ImGui::SetNextWindowSize(ImVec2(600, 480), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(620, 520), ImGuiCond_FirstUseEver);
         if (!ImGui::Begin(title.c_str(), &m_ShowScriptEditor)) { ImGui::End(); return; }
 
-        ImGui::TextWrapped("Glisse les blocs pour organiser la logique. Choisis une categorie et un bloc, puis Ajouter (comme la palette de blueprints d'Unreal).");
+        ImGui::TextWrapped("Les blocs s'executent de haut en bas quand le jeu tourne. Clique un bloc pour regler ses details, glisse-le pour l'organiser.");
         ImGui::Separator();
 
         ImGui::SetNextItemWidth(170.0f);
@@ -849,7 +1356,7 @@ public:
         ImGui::SameLine();
 
         std::vector<int> idxInCat;
-        for (int t = 0; t < IM_ARRAYSIZE(NODE_TYPES); t++) {
+        for (int t = 0; t < NODE_TYPE_COUNT; t++) {
             if (NODE_TYPES[t].category == m_BpCategory) idxInCat.push_back(t);
         }
         if (m_BpTypePick >= (int)idxInCat.size()) m_BpTypePick = 0;
@@ -867,33 +1374,37 @@ public:
         if (ImGui::Button("+ Ajouter le bloc") && !idxInCat.empty()) {
             BlueprintNode n;
             n.type = idxInCat[m_BpTypePick];
-            n.pos = ImVec2(30.0f, 30.0f + (float)obj.blueprint.size() * 40.0f);
+            n.pos = ImVec2(30.0f, 30.0f + (float)obj.blueprint.size() * 96.0f);
             obj.blueprint.push_back(n);
+            m_SelectedNode = (int)obj.blueprint.size() - 1;
         }
         ImGui::Separator();
 
-        ImVec2 visibleSize = ImGui::GetContentRegionAvail();
-        if (visibleSize.x < 100.0f) visibleSize.x = 100.0f;
-        if (visibleSize.y < 100.0f) visibleSize.y = 100.0f;
+        // Zone de details reservee en bas pour que le canvas ne saute pas.
+        const float detailsHeight = 118.0f;
+        ImVec2 avail = ImGui::GetContentRegionAvail();
+        float canvasVisibleH = avail.y - detailsHeight;
+        if (canvasVisibleH < 120.0f) canvasVisibleH = 120.0f;
 
-        ImGui::BeginChild("##bp_canvas_child", visibleSize, true, ImGuiWindowFlags_HorizontalScrollbar);
+        ImGui::BeginChild("##bp_canvas_child", ImVec2(0, canvasVisibleH), true, ImGuiWindowFlags_HorizontalScrollbar);
 
-        const ImVec2 nodeSizeForBounds(230.0f, 56.0f);
+        const ImVec2 nodeSize(230.0f, 56.0f);
         float contentH = 30.0f;
-        for (auto& n : obj.blueprint) contentH = std::max(contentH, n.pos.y + nodeSizeForBounds.y + 20.0f);
+        for (auto& n : obj.blueprint) contentH = std::max(contentH, n.pos.y + nodeSize.y + 20.0f);
         ImVec2 canvasSize = ImGui::GetContentRegionAvail();
         if (canvasSize.y < contentH) canvasSize.y = contentH;
 
         ImVec2 canvasPos = ImGui::GetCursorScreenPos();
         ImGui::InvisibleButton("##bp_canvas_bg", canvasSize);
         ImDrawList* dl = ImGui::GetWindowDrawList();
-        dl->PushClipRect(canvasPos, ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y), true);
-        dl->AddRectFilled(canvasPos, ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y), IM_COL32(28, 28, 36, 255));
-        for (float gx = 0.0f; gx < canvasSize.x; gx += 24.0f)
-            for (float gy = 0.0f; gy < canvasSize.y; gy += 24.0f)
-                dl->AddCircleFilled(ImVec2(canvasPos.x + gx, canvasPos.y + gy), 1.0f, IM_COL32(70, 70, 85, 255));
-
-        const ImVec2 nodeSize(230.0f, 56.0f);
+        ImVec2 canvasEnd(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y);
+        dl->PushClipRect(canvasPos, canvasEnd, true);
+        dl->AddRectFilled(canvasPos, canvasEnd, IM_COL32(28, 28, 36, 255));
+        // Grille en lignes (beaucoup moins de primitives qu'une grille de points).
+        for (float gx = 0.0f; gx < canvasSize.x; gx += 48.0f)
+            dl->AddLine(ImVec2(canvasPos.x + gx, canvasPos.y), ImVec2(canvasPos.x + gx, canvasEnd.y), IM_COL32(48, 48, 60, 255));
+        for (float gy = 0.0f; gy < canvasSize.y; gy += 48.0f)
+            dl->AddLine(ImVec2(canvasPos.x, canvasPos.y + gy), ImVec2(canvasEnd.x, canvasPos.y + gy), IM_COL32(48, 48, 60, 255));
 
         for (int i = 0; i + 1 < (int)obj.blueprint.size(); i++) {
             ImVec2 a = { canvasPos.x + obj.blueprint[i].pos.x + nodeSize.x * 0.5f, canvasPos.y + obj.blueprint[i].pos.y + nodeSize.y };
@@ -915,12 +1426,18 @@ public:
             const NodeTypeInfo& info = NODE_TYPES[node.type];
 
             dl->AddRectFilled(boxMin, boxMax, info.color, 6.0f);
-            dl->AddRect(boxMin, boxMax, IM_COL32(0, 0, 0, 150), 6.0f, 0, 2.0f);
-            dl->AddText(ImVec2(boxMin.x + 10, boxMin.y + 18), IM_COL32(25, 25, 25, 255), info.label);
+            ImU32 border = (i == m_SelectedNode) ? IM_COL32(255, 255, 255, 255) : IM_COL32(0, 0, 0, 150);
+            dl->AddRect(boxMin, boxMax, border, 6.0f, 0, (i == m_SelectedNode) ? 3.0f : 2.0f);
+            dl->AddText(ImVec2(boxMin.x + 10, boxMin.y + 10), IM_COL32(25, 25, 25, 255), info.label);
+            std::string sub = NodeSummary(node);
+            if (!sub.empty()) {
+                dl->AddText(ImVec2(boxMin.x + 10, boxMin.y + 32), IM_COL32(35, 35, 35, 210), sub.c_str());
+            }
 
             ImGui::PushID(i);
             ImGui::SetCursorScreenPos(boxMin);
             ImGui::InvisibleButton("##node", nodeSize);
+            if (ImGui::IsItemActivated()) m_SelectedNode = i;
             if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
                 ImVec2 delta = ImGui::GetIO().MouseDelta;
                 node.pos.x += delta.x;
@@ -935,20 +1452,92 @@ public:
         ImGui::Dummy(canvasSize);
         ImGui::EndChild();
 
-        if (deleteIndex >= 0) obj.blueprint.erase(obj.blueprint.begin() + deleteIndex);
+        if (deleteIndex >= 0) {
+            obj.blueprint.erase(obj.blueprint.begin() + deleteIndex);
+            if (m_SelectedNode == deleteIndex) m_SelectedNode = -1;
+            else if (m_SelectedNode > deleteIndex) m_SelectedNode--;
+        }
 
+        DrawNodeDetails(obj);
         ImGui::End();
+    }
+
+    // Petit resume affiche dans le bloc (2e ligne), facon Unreal.
+    static std::string NodeSummary(const BlueprintNode& node) {
+        char buf[96];
+        switch (NODE_TYPES[node.type].param) {
+            case P_AMOUNT:    snprintf(buf, sizeof(buf), "%.0f", node.a); return buf;
+            case P_THRESHOLD: snprintf(buf, sizeof(buf), "> %.1f", node.a); return buf;
+            case P_SECONDS:   snprintf(buf, sizeof(buf), "%.1f s", node.a); return buf;
+            case P_KEY:       return "touche : " + (node.sparam.empty() ? std::string("E") : node.sparam);
+            case P_TEXT:      return node.sparam;
+            case P_VEC:       snprintf(buf, sizeof(buf), "%.1f, %.1f, %.1f", node.vec.x, node.vec.y, node.vec.z); return buf;
+            case P_VAR_NUM:   snprintf(buf, sizeof(buf), "%s = %.1f", node.sparam.empty() ? "var" : node.sparam.c_str(), node.a); return buf;
+            case P_VAR_RANGE: snprintf(buf, sizeof(buf), "%s : %.0f a %.0f", node.sparam.empty() ? "var" : node.sparam.c_str(), node.a, node.b); return buf;
+            default: return std::string();
+        }
+    }
+
+    void DrawNodeDetails(SceneObject& obj) {
+        ImGui::Separator();
+        if (m_SelectedNode < 0 || m_SelectedNode >= (int)obj.blueprint.size()) {
+            ImGui::TextDisabled("Details du bloc : clique un bloc pour le regler.");
+            return;
+        }
+        BlueprintNode& node = obj.blueprint[m_SelectedNode];
+        const NodeTypeInfo& info = NODE_TYPES[node.type];
+        ImGui::Text("Details : %s", info.label);
+
+        switch (info.param) {
+            case P_AMOUNT:
+                ImGui::DragFloat(info.paramLabel, &node.a, 0.1f, 0.0f, 100.0f, "%.0f");
+                break;
+            case P_THRESHOLD:
+                ImGui::DragFloat(info.paramLabel, &node.a, 0.1f, 0.0f, 100.0f, "%.1f");
+                break;
+            case P_SECONDS:
+                ImGui::DragFloat(info.paramLabel, &node.a, 0.05f, 0.0f, 60.0f, "%.2f s");
+                break;
+            case P_TEXT:
+            case P_KEY:
+                ImGui::InputText(info.paramLabel, (char*)node.sparam.c_str(), node.sparam.capacity() + 1,
+                    ImGuiInputTextFlags_CallbackResize, TextEditCallback, &node.sparam);
+                break;
+            case P_COLOR:
+                ImGui::ColorEdit3(info.paramLabel, &node.vec.x);
+                break;
+            case P_VEC:
+                ImGui::DragFloat3(info.paramLabel, &node.vec.x, 0.1f);
+                break;
+            case P_VAR_NUM:
+                ImGui::InputText("Nom de la variable", (char*)node.sparam.c_str(), node.sparam.capacity() + 1,
+                    ImGuiInputTextFlags_CallbackResize, TextEditCallback, &node.sparam);
+                ImGui::DragFloat("Valeur", &node.a, 0.1f);
+                break;
+            case P_VAR_RANGE:
+                ImGui::InputText("Nom de la variable", (char*)node.sparam.c_str(), node.sparam.capacity() + 1,
+                    ImGuiInputTextFlags_CallbackResize, TextEditCallback, &node.sparam);
+                ImGui::DragFloat("Minimum", &node.a, 0.1f);
+                ImGui::DragFloat("Maximum", &node.b, 0.1f);
+                break;
+            default:
+                ImGui::TextDisabled("Ce bloc n'a rien a regler.");
+                break;
+        }
     }
 
 private:
     static constexpr float FOV_Y = 45.0f * 3.14159265f / 180.0f;
 
     std::unique_ptr<WEngine::Shader> m_Shader;
+    int m_LocModel = -1, m_LocNormalMat = -1, m_LocTint = -1, m_LocLit = -1, m_LocUseTex = -1;
     std::unique_ptr<WEngine::Mesh> m_Cube;
     std::unique_ptr<WEngine::Mesh> m_Sphere;
     std::unique_ptr<WEngine::Mesh> m_Cylinder;
     std::unique_ptr<WEngine::Mesh> m_Grid;
     std::vector<SceneObject> m_Objects;
+    std::vector<SceneObject> m_SavedObjects;   // instantane pris au lancement du jeu
+    std::vector<SceneObject> m_PendingSpawns;
     std::unordered_map<std::string, std::unique_ptr<WEngine::Texture>> m_TextureCache;
     std::vector<std::string> m_AvailableTextures;
     int m_Selected = -1;
@@ -957,11 +1546,17 @@ private:
     WEngine::Camera m_Camera;
     float m_Time = 0.0f;
     float m_LastFrameTime = 0.0f;
+    float m_FrameDt = 0.0f;
     WEngine::Mat4 m_LastViewProj;
     float m_ViewportW = 1.0f, m_ViewportH = 1.0f;
 
+    PlayState m_Play;
+    std::vector<PendingChain> m_Pending;
+    bool m_RestartRequested = false;
+
     bool m_PlayerMode = false;
     WEngine::Vec3 m_PlayerPos{ 0.0f, 1.0f, 6.0f };
+    WEngine::Vec3 m_PlayerSpawn{ 0.0f, 1.0f, 6.0f };
     float m_PlayerVelY = 0.0f;
     bool m_PlayerGrounded = true;
     bool m_PlayerMoving = false;
@@ -976,6 +1571,7 @@ private:
 
     bool m_ShowScriptEditor = false;
     int m_ScriptTarget = -1;
+    int m_SelectedNode = -1;
     int m_BpCategory = 0;
     int m_BpTypePick = 0;
 };

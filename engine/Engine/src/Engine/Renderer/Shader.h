@@ -21,8 +21,13 @@ namespace WEngine {
         void SetMat4(const std::string& name, const float* matrix);
         void SetFloat3(const std::string& name, float v0, float v1, float v2);
 
-    private:
+        // Version rapide pour le rendu : on recupere l'emplacement une seule
+        // fois (il ne change jamais pour un programme donne) au lieu de
+        // construire une std::string a chaque appel, a chaque frame.
         int GetUniformLocation(const std::string& name);
+        void SetInt(int location, int value);
+        void SetMat4(int location, const float* matrix);
+        void SetFloat3(int location, float v0, float v1, float v2);
 
     private:
         unsigned int m_RendererID = 0;
