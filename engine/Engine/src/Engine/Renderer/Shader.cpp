@@ -6,6 +6,24 @@
 
 namespace WEngine {
 
+#ifdef __EMSCRIPTEN__
+    // Le navigateur (WebGL2 / GLES3) veut du GLSL ES : on retraduit a la
+    // volee le "#version 330 core" desktop des shaders de l'appli plutot
+    // que de maintenir deux copies de chaque shader.
+    static std::string ToGLES(const std::string& source, bool isFragment) {
+        static const std::string marker = "#version 330 core";
+        size_t pos = source.find(marker);
+        if (pos == std::string::npos) return source;
+
+        // #version doit etre la toute premiere ligne en GLSL ES : tout ce
+        // qui precede (juste un saut de ligne dans nos shaders) est jete,
+        // pas seulement remplace sur place.
+        std::string header = "#version 300 es\n";
+        if (isFragment) header += "precision highp float;\nprecision highp int;\nprecision highp sampler2D;\n";
+        return header + source.substr(pos + marker.size());
+    }
+#endif
+
     static unsigned int CompileShader(unsigned int type, const std::string& source) {
         unsigned int shader = glCreateShader(type);
         const char* src = source.c_str();
@@ -28,8 +46,13 @@ namespace WEngine {
     }
 
     Shader::Shader(const std::string& vertexSrc, const std::string& fragmentSrc) {
+#ifdef __EMSCRIPTEN__
+        unsigned int vs = CompileShader(GL_VERTEX_SHADER, ToGLES(vertexSrc, false));
+        unsigned int fs = CompileShader(GL_FRAGMENT_SHADER, ToGLES(fragmentSrc, true));
+#else
         unsigned int vs = CompileShader(GL_VERTEX_SHADER, vertexSrc);
         unsigned int fs = CompileShader(GL_FRAGMENT_SHADER, fragmentSrc);
+#endif
 
         m_RendererID = glCreateProgram();
         glAttachShader(m_RendererID, vs);

@@ -23,7 +23,12 @@ namespace WEngine {
     }
 
     void Renderer::SetWireframe(bool enabled) {
+#ifndef __EMSCRIPTEN__
+        // OpenGL ES / WebGL n'a pas de mode fil de fer natif (pas de
+        // glPolygonMode) : le mode "Wireframe" de l'editeur est simplement
+        // indisponible dans le navigateur.
         glPolygonMode(GL_FRONT_AND_BACK, enabled ? GL_LINE : GL_FILL);
+#endif
     }
 
 } // namespace WEngine

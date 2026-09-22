@@ -17,6 +17,7 @@ namespace WEngine {
         virtual ~Application();
 
         void Run();
+        void Tick();
         void Close();
         void OnEvent(Event& event);
 

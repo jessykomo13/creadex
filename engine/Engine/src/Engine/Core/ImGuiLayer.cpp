@@ -91,7 +91,11 @@ namespace WEngine {
 
         auto* window = static_cast<GLFWwindow*>(Application::Get().GetWindow().GetNativeWindow());
         ImGui_ImplGlfw_InitForOpenGL(window, true);
+#ifdef __EMSCRIPTEN__
+        ImGui_ImplOpenGL3_Init("#version 300 es");
+#else
         ImGui_ImplOpenGL3_Init("#version 330");
+#endif
     }
 
     void ImGuiLayer::OnDetach() {

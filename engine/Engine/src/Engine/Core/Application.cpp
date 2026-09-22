@@ -5,6 +5,10 @@
 
 #include <GLFW/glfw3.h>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
 namespace WEngine {
 
     Application* Application::s_Instance = nullptr;
@@ -67,28 +71,44 @@ namespace WEngine {
         return false;
     }
 
+    void Application::Tick() {
+        float time = (float)glfwGetTime();
+        Timestep timestep(time - m_LastFrameTime);
+        m_LastFrameTime = time;
+
+        if (!m_Minimized) {
+            for (Layer* layer : m_LayerStack) {
+                layer->OnUpdate(timestep);
+            }
+
+            m_ImGuiLayer->Begin();
+            for (Layer* layer : m_LayerStack) {
+                layer->OnImGuiRender();
+            }
+            m_ImGuiLayer->End();
+        }
+
+        m_Window->OnUpdate();
+    }
+
+#ifdef __EMSCRIPTEN__
+    static void EmscriptenMainLoop(void* arg) {
+        static_cast<Application*>(arg)->Tick();
+    }
+#endif
+
     void Application::Run() {
         WE_INFO("WEngine starting main loop.");
 
+#ifdef __EMSCRIPTEN__
+        // Le navigateur pilote la boucle (une boucle bloquante gelerait
+        // l'onglet) : on lui confie un "tick" appele a chaque frame.
+        emscripten_set_main_loop_arg(EmscriptenMainLoop, this, 0, 1);
+#else
         while (m_Running) {
-            float time = (float)glfwGetTime();
-            Timestep timestep(time - m_LastFrameTime);
-            m_LastFrameTime = time;
-
-            if (!m_Minimized) {
-                for (Layer* layer : m_LayerStack) {
-                    layer->OnUpdate(timestep);
-                }
-
-                m_ImGuiLayer->Begin();
-                for (Layer* layer : m_LayerStack) {
-                    layer->OnImGuiRender();
-                }
-                m_ImGuiLayer->End();
-            }
-
-            m_Window->OnUpdate();
+            Tick();
         }
+#endif
 
         WE_INFO("WEngine shutting down.");
     }
