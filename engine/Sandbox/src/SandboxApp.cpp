@@ -47,6 +47,12 @@ void main() {
 }
 )";
 
+static const int MAX_POINT_LIGHTS = 8;
+
+// Shader "materiau" facon Unreal : Metallic/Roughness (approximation
+// Cook-Torrance simplifiee, sans carte d'environnement) + emissif, avec
+// un soleil directionnel et jusqu'a 8 lumieres ponctuelles placables dans
+// la scene (attenuation par distance/portee).
 static const char* FRAGMENT_SRC = R"(
 #version 330 core
 in vec3 v_Color;
@@ -59,26 +65,61 @@ uniform vec3 u_Tint;
 uniform int u_Lit;
 uniform int u_UseTexture;
 uniform sampler2D u_Texture;
+
 uniform vec3 u_LightDir;
 uniform vec3 u_LightColor;
 uniform float u_Ambient;
 uniform vec3 u_ViewPos;
 
+uniform float u_Metallic;
+uniform float u_Roughness;
+uniform vec3 u_Emissive;
+
+#define MAX_LIGHTS 8
+uniform int u_PointLightCount;
+uniform vec3 u_PointLightPos[MAX_LIGHTS];
+uniform vec3 u_PointLightColor[MAX_LIGHTS];
+uniform float u_PointLightIntensity[MAX_LIGHTS];
+uniform float u_PointLightRadius[MAX_LIGHTS];
+
+vec3 ShadeLight(vec3 N, vec3 V, vec3 L, vec3 radiance, vec3 albedo, float metallic, float roughness) {
+    vec3 H = normalize(V + L);
+    float NdotL = max(dot(N, L), 0.0);
+    float NdotH = max(dot(N, H), 0.0);
+    vec3 F0 = mix(vec3(0.04), albedo, metallic);
+    float shininess = mix(8.0, 256.0, 1.0 - clamp(roughness, 0.02, 1.0));
+    float spec = pow(NdotH, shininess) * (shininess + 2.0) * 0.125;
+    vec3 specular = F0 * spec;
+    vec3 diffuse = albedo * (1.0 - metallic);
+    return (diffuse + specular) * radiance * NdotL;
+}
+
 void main() {
     vec3 baseColor = (u_UseTexture != 0) ? texture(u_Texture, v_UV).rgb : v_Color;
-    vec3 color = baseColor * u_Tint;
+    vec3 albedo = baseColor * u_Tint;
 
     if (u_Lit != 0) {
         vec3 N = normalize(v_Normal);
-        vec3 L = normalize(-u_LightDir);
-        float diff = max(dot(N, L), 0.0);
-        vec3 viewDir = normalize(u_ViewPos - v_WorldPos);
-        vec3 halfDir = normalize(L + viewDir);
-        float spec = pow(max(dot(N, halfDir), 0.0), 24.0);
-        vec3 lit = color * (u_Ambient + diff * 0.72 * u_LightColor) + u_LightColor * spec * 0.12;
-        FragColor = vec4(lit, 1.0);
+        vec3 V = normalize(u_ViewPos - v_WorldPos);
+
+        vec3 result = albedo * u_Ambient;
+        result += ShadeLight(N, V, normalize(-u_LightDir), u_LightColor, albedo, u_Metallic, u_Roughness);
+
+        for (int i = 0; i < MAX_LIGHTS; i++) {
+            if (i >= u_PointLightCount) break;
+            vec3 toLight = u_PointLightPos[i] - v_WorldPos;
+            float dist = length(toLight);
+            vec3 Lp = toLight / max(dist, 0.0001);
+            float atten = clamp(1.0 - dist / max(u_PointLightRadius[i], 0.001), 0.0, 1.0);
+            atten = atten * atten;
+            vec3 radiance = u_PointLightColor[i] * u_PointLightIntensity[i] * atten;
+            result += ShadeLight(N, V, Lp, radiance, albedo, u_Metallic, u_Roughness);
+        }
+
+        result += u_Emissive;
+        FragColor = vec4(result, 1.0);
     } else {
-        FragColor = vec4(color, 1.0);
+        FragColor = vec4(albedo, 1.0);
     }
 }
 )";
@@ -223,13 +264,13 @@ struct BlueprintNode {
     WEngine::Vec3 vec{ 1.0f, 1.0f, 1.0f };
 };
 
-static const char* SHAPE_NAMES[] = { "Cube", "Sphere", "Cylindre", "Camera", "Texte", "Modele 3D" };
-enum ShapeType { Shape_Cube = 0, Shape_Sphere = 1, Shape_Cylinder = 2, Shape_Camera = 3, Shape_Text = 4, Shape_Model = 5 };
+static const char* SHAPE_NAMES[] = { "Cube", "Sphere", "Cylindre", "Camera", "Texte", "Modele 3D", "Lumiere" };
+enum ShapeType { Shape_Cube = 0, Shape_Sphere = 1, Shape_Cylinder = 2, Shape_Camera = 3, Shape_Text = 4, Shape_Model = 5, Shape_Light = 6 };
 
 struct SceneObject {
     std::string name;
     WEngine::Vec3 position;
-    WEngine::Vec3 tint{ 1.0f, 1.0f, 1.0f };
+    WEngine::Vec3 tint{ 1.0f, 1.0f, 1.0f }; // couleur ; pour une Lumiere : couleur de la lumiere
     float rotationSpeed = 0.0f;
     float pickRadius = 0.9f;
     std::vector<BlueprintNode> blueprint;
@@ -240,6 +281,16 @@ struct SceneObject {
     std::string modelPath;   // .obj importe (shape == Shape_Model)
     std::string text = "Texte"; // utilise seulement si shape == Shape_Text
     bool collision = true;   // l'objet bloque-t-il le joueur / sert-il de sol ?
+
+    // Materiau (facon Unreal : Metallic/Roughness), pour les formes solides.
+    float metallic = 0.0f;
+    float roughness = 0.6f;
+    WEngine::Vec3 emissive{ 0.0f, 0.0f, 0.0f };
+    float emissiveStrength = 0.0f;
+
+    // Lumiere ponctuelle (shape == Shape_Light)
+    float lightIntensity = 3.0f;
+    float lightRadius = 10.0f;
 
     // Etat de jeu (remis a zero quand on arrete le jeu)
     bool destroyed = false;
@@ -376,6 +427,18 @@ public:
         textObj.tint = { 1.0f, 1.0f, 1.0f };
         m_Objects.push_back(textObj);
 
+        // Lumiere de demo : orange chaude au-dessus du piege, pour montrer
+        // tout de suite l'effet d'une lumiere ponctuelle sur un materiau.
+        SceneObject lightObj;
+        lightObj.name = "Lumiere 1";
+        lightObj.shape = Shape_Light;
+        lightObj.position = { 0.0f, 2.5f, 1.5f };
+        lightObj.tint = { 1.0f, 0.55f, 0.2f };
+        lightObj.lightIntensity = 4.0f;
+        lightObj.lightRadius = 9.0f;
+        lightObj.collision = false;
+        m_Objects.push_back(lightObj);
+
         RefreshContentList();
     }
 
@@ -482,10 +545,27 @@ public:
         m_Shader->SetFloat3("u_ViewPos", viewPos.x, viewPos.y, viewPos.z);
         m_Shader->SetInt("u_Texture", 0);
 
+        // Lumieres ponctuelles placees dans la scene (jusqu'a MAX_POINT_LIGHTS).
+        int lightCount = 0;
+        for (const auto& obj : m_Objects) {
+            if (obj.destroyed || obj.shape != Shape_Light) continue;
+            if (lightCount >= MAX_POINT_LIGHTS) break;
+            std::string idx = std::to_string(lightCount);
+            m_Shader->SetFloat3(("u_PointLightPos[" + idx + "]").c_str(), obj.position.x, obj.position.y, obj.position.z);
+            m_Shader->SetFloat3(("u_PointLightColor[" + idx + "]").c_str(), obj.tint.x, obj.tint.y, obj.tint.z);
+            m_Shader->SetFloat(("u_PointLightIntensity[" + idx + "]").c_str(), obj.lightIntensity);
+            m_Shader->SetFloat(("u_PointLightRadius[" + idx + "]").c_str(), obj.lightRadius);
+            lightCount++;
+        }
+        m_Shader->SetInt("u_PointLightCount", lightCount);
+
         // Grille : non eclairee, couleur fixe.
         m_Shader->SetInt(m_LocLit, 0);
         m_Shader->SetInt(m_LocUseTex, 0);
         m_Shader->SetFloat3(m_LocTint, 1.0f, 1.0f, 1.0f);
+        m_Shader->SetFloat("u_Metallic", 0.0f);
+        m_Shader->SetFloat("u_Roughness", 1.0f);
+        m_Shader->SetFloat3("u_Emissive", 0.0f, 0.0f, 0.0f);
         SetModel(WEngine::Mat4::Identity());
         if (m_ShowGrid) m_Grid->Draw();
 
@@ -497,6 +577,10 @@ public:
             if (obj.shape == Shape_Camera) {
                 if (i == skipCamera) continue;
                 DrawCameraMarker(obj, !m_PlayerMode && i == m_Selected);
+                continue;
+            }
+            if (obj.shape == Shape_Light) {
+                DrawLightMarker(obj, !m_PlayerMode && i == m_Selected);
                 continue;
             }
 
@@ -523,6 +607,10 @@ public:
                 m_Shader->SetInt(m_LocUseTex, 0);
             }
             m_Shader->SetFloat3(m_LocTint, tint.x, tint.y, tint.z);
+            m_Shader->SetFloat("u_Metallic", obj.metallic);
+            m_Shader->SetFloat("u_Roughness", obj.roughness);
+            m_Shader->SetFloat3("u_Emissive", obj.emissive.x * obj.emissiveStrength,
+                obj.emissive.y * obj.emissiveStrength, obj.emissive.z * obj.emissiveStrength);
             SetModel(model);
             MeshFor(obj)->Draw();
         }
@@ -536,6 +624,18 @@ public:
             && m_Objects[m_Selected].shape != Shape_Text) {
             DrawGizmo(m_Objects[m_Selected]);
         }
+    }
+
+    // Petite ampoule non eclairee, coloree par la couleur de la lumiere,
+    // avec un halo transparent pour donner une idee de sa portee.
+    void DrawLightMarker(const SceneObject& obj, bool selected) {
+        m_Shader->SetInt(m_LocLit, 0);
+        m_Shader->SetInt(m_LocUseTex, 0);
+        WEngine::Vec3 tint = selected ? WEngine::Vec3(1.0f, 1.0f, 1.0f) : obj.tint;
+        m_Shader->SetFloat3(m_LocTint, tint.x, tint.y, tint.z);
+        WEngine::Mat4 bulb = WEngine::Mat4::Multiply(WEngine::Mat4::Translate(obj.position), WEngine::Mat4::Scale({ 0.3f, 0.3f, 0.3f }));
+        SetModel(bulb);
+        m_Sphere->Draw();
     }
 
     void SetModel(const WEngine::Mat4& model) {
@@ -728,6 +828,9 @@ public:
             f << "texture " << o.texturePath << "\n";
             f << "model " << o.modelPath << "\n";
             f << "text " << o.text << "\n";
+            f << "material " << o.metallic << " " << o.roughness << " " << o.emissiveStrength << "\n";
+            f << "emissive " << o.emissive.x << " " << o.emissive.y << " " << o.emissive.z << "\n";
+            f << "lightparams " << o.lightIntensity << " " << o.lightRadius << "\n";
             for (const auto& n : o.blueprint) {
                 f << "node " << n.type << " " << n.pos.x << " " << n.pos.y << " "
                   << n.a << " " << n.b << " " << n.vec.x << " " << n.vec.y << " " << n.vec.z
@@ -776,6 +879,9 @@ public:
             else if (key == "texture") cur.texturePath = rest();
             else if (key == "model") cur.modelPath = rest();
             else if (key == "text") cur.text = rest();
+            else if (key == "material") ss >> cur.metallic >> cur.roughness >> cur.emissiveStrength;
+            else if (key == "emissive") ss >> cur.emissive.x >> cur.emissive.y >> cur.emissive.z;
+            else if (key == "lightparams") ss >> cur.lightIntensity >> cur.lightRadius;
             else if (key == "node") {
                 BlueprintNode n;
                 ss >> n.type >> n.pos.x >> n.pos.y >> n.a >> n.b >> n.vec.x >> n.vec.y >> n.vec.z;
@@ -833,7 +939,7 @@ public:
     }
 
     bool PlayerTouches(const SceneObject& obj) const {
-        if (obj.shape == Shape_Camera || obj.shape == Shape_Text) return false;
+        if (obj.shape == Shape_Camera || obj.shape == Shape_Text || obj.shape == Shape_Light) return false;
         if (!obj.collision) return false;
         // Marge un peu plus large que celle du blocage (CollidesAt), sinon le
         // joueur s'arrete pile au bord sans jamais "toucher" l'objet.
@@ -1189,7 +1295,7 @@ public:
         float best = VOID_Y;
         for (auto& obj : m_Objects) {
             if (obj.destroyed || !obj.collision) continue;
-            if (obj.shape == Shape_Camera || obj.shape == Shape_Text) continue;
+            if (obj.shape == Shape_Camera || obj.shape == Shape_Text || obj.shape == Shape_Light) continue;
             float halfX = std::fabs(obj.scale.x) * 0.5f, halfZ = std::fabs(obj.scale.z) * 0.5f;
             if (x >= obj.position.x - halfX && x <= obj.position.x + halfX &&
                 z >= obj.position.z - halfZ && z <= obj.position.z + halfZ) {
@@ -1213,7 +1319,7 @@ public:
         float head = centerY + PLAYER_HALF_HEIGHT;
         for (auto& obj : m_Objects) {
             if (obj.destroyed || !obj.collision) continue;
-            if (obj.shape == Shape_Camera || obj.shape == Shape_Text) continue;
+            if (obj.shape == Shape_Camera || obj.shape == Shape_Text || obj.shape == Shape_Light) continue;
             float halfX = std::fabs(obj.scale.x) * 0.5f + PLAYER_RADIUS;
             float halfZ = std::fabs(obj.scale.z) * 0.5f + PLAYER_RADIUS;
             float minY = obj.position.y - std::fabs(obj.scale.y) * 0.5f;
@@ -1688,7 +1794,8 @@ public:
             obj.tint = { 0.8f, 0.8f, 0.8f };
             obj.shape = m_NewShape;
             if (m_NewShape == Shape_Text) obj.text = "Nouveau texte";
-            if (m_NewShape == Shape_Camera || m_NewShape == Shape_Text) obj.collision = false;
+            if (m_NewShape == Shape_Camera || m_NewShape == Shape_Text || m_NewShape == Shape_Light) obj.collision = false;
+            if (m_NewShape == Shape_Light) obj.tint = { 1.0f, 0.92f, 0.75f }; // blanc chaud par defaut
             m_Objects.push_back(obj);
             m_Selected = (int)m_Objects.size() - 1;
         }
@@ -1711,14 +1818,26 @@ public:
         ImGui::TextDisabled("Type : %s", SHAPE_NAMES[obj.shape]);
         ImGui::Separator();
 
+        bool isSolid = (obj.shape == Shape_Cube || obj.shape == Shape_Sphere
+                     || obj.shape == Shape_Cylinder || obj.shape == Shape_Model);
+
         if (ImGui::CollapsingHeader("Transformation", ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::DragFloat3("Emplacement", &obj.position.x, 0.05f);
             if (obj.shape == Shape_Camera) {
                 ImGui::DragFloat("Rotation X (pitch)", &obj.rotationEuler.x, 0.5f, -89.0f, 89.0f);
                 ImGui::DragFloat("Rotation Y (yaw)", &obj.rotationEuler.y, 0.5f);
-            } else {
+            } else if (obj.shape != Shape_Light) {
                 ImGui::DragFloat3("Rotation", &obj.rotationEuler.x, 0.5f);
                 ImGui::DragFloat3("Echelle", &obj.scale.x, 0.02f, 0.05f, 40.0f);
+            }
+        }
+
+        if (obj.shape == Shape_Light) {
+            if (ImGui::CollapsingHeader("Lumiere", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::ColorEdit3("Couleur", &obj.tint.x);
+                ImGui::DragFloat("Intensite", &obj.lightIntensity, 0.05f, 0.0f, 50.0f);
+                ImGui::DragFloat("Portee", &obj.lightRadius, 0.1f, 0.5f, 100.0f);
+                ImGui::TextDisabled("Portee = distance a laquelle la lumiere s'eteint.");
             }
         }
 
@@ -1743,7 +1862,7 @@ public:
             }
         }
 
-        if (obj.shape != Shape_Camera && obj.shape != Shape_Text) {
+        if (isSolid) {
             if (ImGui::CollapsingHeader("Rendu", ImGuiTreeNodeFlags_DefaultOpen)) {
                 ImGui::ColorEdit3("Couleur", &obj.tint.x);
                 ImGui::DragFloat("Rotation auto", &obj.rotationSpeed, 0.02f, 0.0f, 5.0f);
@@ -1760,6 +1879,23 @@ public:
                 } else {
                     ImGui::Text("Texture : %s", fs::path(obj.texturePath).filename().string().c_str());
                     if (ImGui::Button("Retirer la texture", ImVec2(-1, 0))) obj.texturePath.clear();
+                }
+            }
+
+            // Materiau facon Unreal : Metallic / Roughness / Emissif. Les
+            // valeurs pilotent directement le shader (voir FRAGMENT_SRC).
+            if (ImGui::CollapsingHeader("Materiau", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::SliderFloat("Metallique", &obj.metallic, 0.0f, 1.0f);
+                ImGui::SliderFloat("Rugosite", &obj.roughness, 0.02f, 1.0f);
+                ImGui::TextDisabled("Metallique 0 = plastique/bois, 1 = metal brut. Rugosite 0 = poli/miroir, 1 = mat.");
+                ImGui::ColorEdit3("Couleur emissive", &obj.emissive.x);
+                ImGui::DragFloat("Intensite emissive", &obj.emissiveStrength, 0.02f, 0.0f, 20.0f);
+                if (ImGui::Button("Preset : Plastique", ImVec2(-1, 0))) { obj.metallic = 0.0f; obj.roughness = 0.55f; }
+                if (ImGui::Button("Preset : Metal brosse", ImVec2(-1, 0))) { obj.metallic = 1.0f; obj.roughness = 0.4f; }
+                if (ImGui::Button("Preset : Metal poli / miroir", ImVec2(-1, 0))) { obj.metallic = 1.0f; obj.roughness = 0.06f; }
+                if (ImGui::Button("Preset : Neon (emissif)", ImVec2(-1, 0))) {
+                    obj.metallic = 0.0f; obj.roughness = 0.6f;
+                    obj.emissive = obj.tint; obj.emissiveStrength = 3.0f;
                 }
             }
 
@@ -1786,6 +1922,14 @@ public:
             }
             if (ImGui::Button("Ouvrir le Blueprint (N)", ImVec2(-1, 0))) {
                 OpenBlueprintEditor(m_Selected);
+            }
+            if (!obj.blueprint.empty()) {
+                if (ImGui::Button("Vider le Blueprint (tout supprimer)", ImVec2(-1, 0))) {
+                    PushUndo();
+                    obj.blueprint.clear();
+                    m_SelectedNode = -1;
+                    SetStatus("Blueprint vide");
+                }
             }
         }
 
@@ -2124,16 +2268,34 @@ public:
             }
 
             ImGui::PushID(i);
+
+            // Bouton "x" teste a la main (hors du systeme de widgets ImGui) :
+            // le SmallButton dessine par-dessus l'InvisibleButton du bloc ne
+            // recevait jamais le clic (probleme de resolution de survol par
+            // superposition d'ImGui 1.93), donc on fait le hit-test nous-memes
+            // et on desactive le glisser-deposer du bloc si la souris est dedans.
+            ImVec2 delMin = ImVec2(boxMax.x - 22.0f, boxMin.y + 2.0f);
+            ImVec2 delMax = ImVec2(boxMax.x - 2.0f, boxMin.y + 20.0f);
+            bool overDelete = ImGui::IsMouseHoveringRect(delMin, delMax);
+
             ImGui::SetCursorScreenPos(boxMin);
             ImGui::InvisibleButton("##node", nodeSize);
-            if (ImGui::IsItemActivated()) m_SelectedNode = i;
-            if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-                ImVec2 delta = ImGui::GetIO().MouseDelta;
-                node.pos.x += delta.x;
-                node.pos.y += delta.y;
+            if (!overDelete) {
+                if (ImGui::IsItemActivated()) m_SelectedNode = i;
+                if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+                    ImVec2 delta = ImGui::GetIO().MouseDelta;
+                    node.pos.x += delta.x;
+                    node.pos.y += delta.y;
+                }
             }
-            ImGui::SetCursorScreenPos(ImVec2(boxMax.x - 22.0f, boxMin.y + 2.0f));
-            if (ImGui::SmallButton("x")) deleteIndex = i;
+
+            ImU32 delCol = overDelete ? IM_COL32(230, 60, 60, 255) : IM_COL32(0, 0, 0, 130);
+            dl->AddRectFilled(delMin, delMax, delCol, 3.0f);
+            dl->AddText(ImVec2(delMin.x + 6.0f, delMin.y + 1.0f), IM_COL32(255, 255, 255, 255), "x");
+            if (overDelete && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                deleteIndex = i;
+                m_SelectedNode = -1;
+            }
             ImGui::PopID();
         }
         dl->PopClipRect();
