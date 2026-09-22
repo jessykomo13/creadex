@@ -234,6 +234,8 @@ enum NodeType {
     N_ACT_SET_POSITION,
     N_ACT_SET_ROTATION,
     N_ACT_SET_JUMP_FORCE,
+    N_EVT_INTERVAL,
+    N_ACT_SET_CHECKPOINT,
 };
 
 struct NodeTypeInfo {
@@ -337,6 +339,8 @@ static const NodeTypeInfo NODE_TYPES[] = {
     { Cat_Action,    "Action : Definir la position de cet objet", "Pos =",  IM_COL32(70, 130, 210, 255),  P_VEC,       "Position" },
     { Cat_Action,    "Action : Definir la rotation de cet objet", "Rot =",  IM_COL32(70, 130, 210, 255),  P_VEC,       "Rotation (degres)" },
     { Cat_Action,    "Action : Regler la force de saut du joueur", "Saut =", IM_COL32(70, 130, 210, 255), P_AMOUNT,    "Force" },
+    { Cat_Event,     "Evenement : Toutes les X secondes",    "Intervalle",  IM_COL32(205, 70, 70, 255),   P_SECONDS,   "Secondes" },
+    { Cat_Action,    "Action : Activer ce point de passage",  "Checkpoint",  IM_COL32(70, 130, 210, 255),  P_NONE,      nullptr },
 };
 static const int NODE_TYPE_COUNT = (int)(sizeof(NODE_TYPES) / sizeof(NODE_TYPES[0]));
 
@@ -347,10 +351,11 @@ struct BlueprintNode {
     float b = 10.0f;
     std::string sparam;
     WEngine::Vec3 vec{ 1.0f, 1.0f, 1.0f };
+    float timer = 0.0f; // etat d'execution (ex: "Toutes les X secondes"), jamais sauvegarde
 };
 
-static const char* SHAPE_NAMES[] = { "Cube", "Sphere", "Cylindre", "Camera", "Texte", "Modele 3D", "Lumiere", "Depart Joueur" };
-enum ShapeType { Shape_Cube = 0, Shape_Sphere = 1, Shape_Cylinder = 2, Shape_Camera = 3, Shape_Text = 4, Shape_Model = 5, Shape_Light = 6, Shape_PlayerStart = 7 };
+static const char* SHAPE_NAMES[] = { "Cube", "Sphere", "Cylindre", "Camera", "Texte", "Modele 3D", "Lumiere", "Depart Joueur", "Point de passage" };
+enum ShapeType { Shape_Cube = 0, Shape_Sphere = 1, Shape_Cylinder = 2, Shape_Camera = 3, Shape_Text = 4, Shape_Model = 5, Shape_Light = 6, Shape_PlayerStart = 7, Shape_Checkpoint = 8 };
 
 struct SceneObject {
     std::string name;
@@ -518,6 +523,20 @@ public:
         startObj.collision = false;
         m_Objects.push_back(startObj);
 
+        // Point de passage de demo, en haut des plateformes : l'atteindre
+        // change le point de reapparition du joueur.
+        {
+            SceneObject cp;
+            cp.name = "Point de passage 1";
+            cp.shape = Shape_Checkpoint;
+            cp.position = { 7.0f, 5.0f, 3.0f };
+            // collision reste true : PlayerTouches() en a besoin pour
+            // detecter le contact (Shape_Checkpoint ne bloque jamais le
+            // joueur physiquement, c'est gere a part dans CollidesAt/etc.).
+            cp.blueprint = DefaultBlueprint(Shape_Checkpoint);
+            m_Objects.push_back(cp);
+        }
+
         SceneObject textObj;
         textObj.name = "Texte 1";
         textObj.shape = Shape_Text;
@@ -564,6 +583,11 @@ public:
         }
         if (shape == Shape_PlayerStart) {
             return bp; // pas de logique par defaut : c'est juste un repere de position
+        }
+        if (shape == Shape_Checkpoint) {
+            add(N_EVT_COLLISION);
+            add(N_ACT_SET_CHECKPOINT);
+            return bp;
         }
         if (shape == Shape_Text) {
             add(N_EVT_BEGIN);
@@ -702,6 +726,12 @@ public:
                 DrawPlayerStartMarker(obj, i == m_Selected);
                 continue;
             }
+            if (obj.shape == Shape_Checkpoint) {
+                // Visible aussi pendant le jeu : le joueur doit pouvoir le
+                // reperer pour savoir ou il va reapparaitre.
+                DrawCheckpointMarker(obj, !m_PlayerMode && i == m_Selected);
+                continue;
+            }
 
             WEngine::Mat4 rot = WEngine::Mat4::Multiply(
                 WEngine::Mat4::RotateY(m_Time * obj.rotationSpeed + obj.rotationEuler.y * DEG2RAD),
@@ -780,6 +810,32 @@ public:
         WEngine::Mat4 post = WEngine::Mat4::Multiply(base, WEngine::Mat4::Multiply(
             WEngine::Mat4::Translate({ 0.0f, 0.9f, 0.0f }), WEngine::Mat4::Scale({ 0.18f, 1.8f, 0.18f })));
         SetModel(post);
+        m_Cylinder->Draw();
+    }
+
+    // Un drapeau : un mat + un fanion qui se voit meme pendant la partie,
+    // pour que le joueur sache ou il reapparaitra apres l'avoir touche.
+    void DrawCheckpointMarker(const SceneObject& obj, bool selected) {
+        WEngine::Mat4 base = WEngine::Mat4::Multiply(
+            WEngine::Mat4::Translate(obj.position), WEngine::Mat4::RotateY(obj.rotationEuler.y * DEG2RAD));
+        WEngine::Vec3 tint = selected ? WEngine::Vec3(1.0f, 1.0f, 1.0f) : WEngine::Vec3(0.95f, 0.75f, 0.15f);
+
+        m_Shader->SetInt(m_LocLit, 0);
+        m_Shader->SetInt(m_LocUseTex, 0);
+        m_Shader->SetFloat3(m_LocTint, tint.x, tint.y, tint.z);
+
+        WEngine::Mat4 pole = WEngine::Mat4::Multiply(base, WEngine::Mat4::Multiply(
+            WEngine::Mat4::Translate({ 0.0f, 1.0f, 0.0f }), WEngine::Mat4::Scale({ 0.1f, 2.0f, 0.1f })));
+        SetModel(pole);
+        m_Cylinder->Draw();
+
+        WEngine::Mat4 flag = WEngine::Mat4::Multiply(base, WEngine::Mat4::Multiply(
+            WEngine::Mat4::Translate({ 0.32f, 1.7f, 0.0f }), WEngine::Mat4::Scale({ 0.64f, 0.4f, 0.05f })));
+        SetModel(flag);
+        m_Cube->Draw();
+
+        WEngine::Mat4 base_disc = WEngine::Mat4::Multiply(base, WEngine::Mat4::Scale({ 0.55f, 0.03f, 0.55f }));
+        SetModel(base_disc);
         m_Cylinder->Draw();
     }
 
@@ -1143,6 +1199,23 @@ public:
         for (int i = 0; i < (int)m_Objects.size(); i++) {
             if (m_Objects[i].destroyed) continue;
             FireEvent(i, N_EVT_TICK);
+        }
+        // "Toutes les X secondes" : chaque bloc garde son propre chronometre
+        // (jamais sauvegarde) au lieu de dependre d'un evenement Tick a la main.
+        for (int i = 0; i < (int)m_Objects.size(); i++) {
+            if (m_Objects[i].destroyed) continue;
+            std::vector<int> starts;
+            auto& bp = m_Objects[i].blueprint;
+            for (int j = 0; j < (int)bp.size(); j++) {
+                if (bp[j].type != N_EVT_INTERVAL) continue;
+                bp[j].timer += dt;
+                float interval = bp[j].a > 0.0f ? bp[j].a : 1.0f;
+                if (bp[j].timer >= interval) {
+                    bp[j].timer -= interval;
+                    starts.push_back(j + 1);
+                }
+            }
+            for (int s : starts) RunChain(i, s);
         }
         for (int i = 0; i < (int)m_Objects.size(); i++) {
             if (m_Objects[i].destroyed) continue;
@@ -1527,6 +1600,12 @@ public:
             case N_ACT_SET_POSITION: obj.position = node.vec; break;
             case N_ACT_SET_ROTATION: obj.rotationEuler = node.vec; break;
             case N_ACT_SET_JUMP_FORCE: m_Play.jumpForce = node.a; break;
+            case N_ACT_SET_CHECKPOINT:
+                m_PlayerSpawn = obj.position;
+                m_PlayerSpawn.y += PlayerHalfHeight();
+                m_PlayerFacingYaw = obj.rotationEuler.y * DEG2RAD;
+                AddMessage("Point de passage active");
+                break;
             default: break;
         }
         return true;
@@ -1542,7 +1621,7 @@ public:
         float best = VOID_Y;
         for (auto& obj : m_Objects) {
             if (obj.destroyed || !obj.collision) continue;
-            if (obj.shape == Shape_Camera || obj.shape == Shape_Text || obj.shape == Shape_Light || obj.shape == Shape_PlayerStart) continue;
+            if (obj.shape == Shape_Camera || obj.shape == Shape_Text || obj.shape == Shape_Light || obj.shape == Shape_PlayerStart || obj.shape == Shape_Checkpoint) continue;
             float halfX = std::fabs(obj.scale.x) * 0.5f, halfZ = std::fabs(obj.scale.z) * 0.5f;
             if (x >= obj.position.x - halfX && x <= obj.position.x + halfX &&
                 z >= obj.position.z - halfZ && z <= obj.position.z + halfZ) {
@@ -1564,7 +1643,7 @@ public:
         float best = 1e9f;
         for (auto& obj : m_Objects) {
             if (obj.destroyed || !obj.collision) continue;
-            if (obj.shape == Shape_Camera || obj.shape == Shape_Text || obj.shape == Shape_Light || obj.shape == Shape_PlayerStart) continue;
+            if (obj.shape == Shape_Camera || obj.shape == Shape_Text || obj.shape == Shape_Light || obj.shape == Shape_PlayerStart || obj.shape == Shape_Checkpoint) continue;
             float halfX = std::fabs(obj.scale.x) * 0.5f, halfZ = std::fabs(obj.scale.z) * 0.5f;
             if (x >= obj.position.x - halfX && x <= obj.position.x + halfX &&
                 z >= obj.position.z - halfZ && z <= obj.position.z + halfZ) {
@@ -1590,7 +1669,7 @@ public:
         float head = centerY + PlayerHalfHeight();
         for (auto& obj : m_Objects) {
             if (obj.destroyed || !obj.collision) continue;
-            if (obj.shape == Shape_Camera || obj.shape == Shape_Text || obj.shape == Shape_Light || obj.shape == Shape_PlayerStart) continue;
+            if (obj.shape == Shape_Camera || obj.shape == Shape_Text || obj.shape == Shape_Light || obj.shape == Shape_PlayerStart || obj.shape == Shape_Checkpoint) continue;
             float halfX = std::fabs(obj.scale.x) * 0.5f + PlayerRadius();
             float halfZ = std::fabs(obj.scale.z) * 0.5f + PlayerRadius();
             float minY = obj.position.y - std::fabs(obj.scale.y) * 0.5f;
@@ -2104,8 +2183,12 @@ public:
             obj.shape = m_NewShape;
             if (m_NewShape == Shape_Text) obj.text = "Nouveau texte";
             if (m_NewShape == Shape_Camera || m_NewShape == Shape_Text || m_NewShape == Shape_Light || m_NewShape == Shape_PlayerStart) obj.collision = false;
+            // Un Point de passage garde collision = true : ca ne le rend pas
+            // solide (Shape_Checkpoint est deja exclu de CollidesAt etc.),
+            // mais PlayerTouches() s'appuie sur ce meme booleen pour savoir
+            // si l'objet peut declencher un evenement au contact.
             if (m_NewShape == Shape_Light) obj.tint = { 1.0f, 0.92f, 0.75f }; // blanc chaud par defaut
-            if (m_NewShape == Shape_PlayerStart) obj.position.y = 0.0f;
+            if (m_NewShape == Shape_PlayerStart || m_NewShape == Shape_Checkpoint) obj.position.y = 0.0f;
             m_Objects.push_back(obj);
             m_Selected = (int)m_Objects.size() - 1;
         }
@@ -2133,7 +2216,7 @@ public:
 
         if (ImGui::CollapsingHeader("Transformation", ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::DragFloat3("Emplacement", &obj.position.x, 0.05f);
-            if (obj.shape == Shape_Camera || obj.shape == Shape_PlayerStart) {
+            if (obj.shape == Shape_Camera || obj.shape == Shape_PlayerStart || obj.shape == Shape_Checkpoint) {
                 ImGui::DragFloat("Rotation X (pitch)", &obj.rotationEuler.x, 0.5f, -89.0f, 89.0f);
                 ImGui::DragFloat("Rotation Y (yaw)", &obj.rotationEuler.y, 0.5f);
             } else if (obj.shape != Shape_Light) {
@@ -2178,6 +2261,15 @@ public:
                                    "La rotation Y donne la direction dans laquelle il regarde en arrivant. "
                                    "S'il n'y a aucun \"Depart Joueur\" dans la scene, le jeu se lance sans "
                                    "personnage controlable (utile pour une scene juste filmee par une camera).");
+            }
+        }
+
+        if (obj.shape == Shape_Checkpoint) {
+            if (ImGui::CollapsingHeader("Point de passage", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::TextWrapped("Quand le joueur le touche en jeu (bloc \"Activer ce point de "
+                                   "passage\" dans son Blueprint), son point de reapparition change : "
+                                   "apres une chute ou un \"Renvoyer le joueur au depart\", il repart "
+                                   "d'ici au lieu du \"Depart Joueur\" d'origine.");
             }
         }
 
