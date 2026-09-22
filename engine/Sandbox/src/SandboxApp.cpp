@@ -141,6 +141,7 @@ enum ParamKind {
     P_VAR_NUM,    // sparam + a : nom de variable et valeur
     P_VAR_RANGE,  // sparam + a + b : variable et intervalle
     P_THRESHOLD,  // a : seuil
+    P_VARNAME,    // sparam : juste un nom de variable (pas de valeur)
 };
 
 enum NodeType {
@@ -191,6 +192,48 @@ enum NodeType {
     N_COND_PLAYER_NEAR,
     N_COND_CHANCE,
     N_EVT_COLLISION_EXIT,
+
+    // --- Lot supplementaire de blocs (conditions, actions, variables) ---
+    N_COND_LIFE_LE,
+    N_COND_LIFE_GE,
+    N_COND_SCORE_GE,
+    N_COND_SCORE_LE,
+    N_COND_VAR_GT,
+    N_COND_VAR_LT,
+    N_COND_VAR_GE,
+    N_COND_VAR_LE,
+    N_COND_KEY_HELD,
+    N_COND_MOVING,
+    N_COND_TOUCHING_NOW,
+    N_ACT_SET_LIFE,
+    N_ACT_SET_SCORE,
+    N_ACT_SUB_SCORE,
+    N_ACT_RESET_SCORE,
+    N_ACT_FULL_HEAL,
+    N_ACT_HIDE_OBJECT,
+    N_ACT_SHOW_OBJECT,
+    N_ACT_TOGGLE_VISIBLE,
+    N_ACT_FREEZE_PLAYER,
+    N_ACT_UNFREEZE_PLAYER,
+    N_ACT_SET_METALLIC,
+    N_ACT_SET_ROUGHNESS,
+    N_ACT_SET_EMISSIVE,
+    N_ACT_SET_LIGHT_INTENSITY,
+    N_ACT_SET_LIGHT_RANGE,
+    N_MATH_MUL,
+    N_MATH_DIV,
+    N_VAR_FROM_LIFE,
+    N_VAR_FROM_SCORE,
+    N_VAR_FROM_DIST_PLAYER,
+    N_ACT_TP_TO_PLAYER,
+    N_ACT_TP_PLAYER_HERE,
+    N_ACT_INVERT_GRAVITY,
+    N_ACT_JUMP,
+    N_ACT_STOP_PLAYER,
+    N_ACT_PUSH_PLAYER,
+    N_ACT_SET_POSITION,
+    N_ACT_SET_ROTATION,
+    N_ACT_SET_JUMP_FORCE,
 };
 
 struct NodeTypeInfo {
@@ -252,6 +295,48 @@ static const NodeTypeInfo NODE_TYPES[] = {
     { Cat_Condition, "Condition : Joueur proche ?",          "Proche?",     IM_COL32(215, 185, 60, 255),  P_THRESHOLD, "Distance" },
     { Cat_Condition, "Condition : Chance sur 100 ?",         "Chance?",     IM_COL32(215, 185, 60, 255),  P_THRESHOLD, "Pourcentage" },
     { Cat_Event,     "Evenement : Le joueur quitte l'objet", "Sortie",      IM_COL32(205, 70, 70, 255),   P_NONE,      nullptr },
+
+    // --- Lot supplementaire ---
+    { Cat_Condition, "Condition : Vie <= valeur ?",          "Vie<=?",      IM_COL32(215, 185, 60, 255),  P_THRESHOLD, "Seuil" },
+    { Cat_Condition, "Condition : Vie >= valeur ?",          "Vie>=?",      IM_COL32(215, 185, 60, 255),  P_THRESHOLD, "Seuil" },
+    { Cat_Condition, "Condition : Score >= valeur ?",        "Score>=?",    IM_COL32(215, 185, 60, 255),  P_THRESHOLD, "Seuil" },
+    { Cat_Condition, "Condition : Score <= valeur ?",        "Score<=?",    IM_COL32(215, 185, 60, 255),  P_THRESHOLD, "Seuil" },
+    { Cat_Condition, "Condition : Variable > valeur ?",      "Var>?",       IM_COL32(215, 185, 60, 255),  P_VAR_NUM,   "Variable / valeur" },
+    { Cat_Condition, "Condition : Variable < valeur ?",      "Var<?",       IM_COL32(215, 185, 60, 255),  P_VAR_NUM,   "Variable / valeur" },
+    { Cat_Condition, "Condition : Variable >= valeur ?",     "Var>=?",      IM_COL32(215, 185, 60, 255),  P_VAR_NUM,   "Variable / valeur" },
+    { Cat_Condition, "Condition : Variable <= valeur ?",     "Var<=?",      IM_COL32(215, 185, 60, 255),  P_VAR_NUM,   "Variable / valeur" },
+    { Cat_Condition, "Condition : Touche maintenue ?",       "Maintenue?",  IM_COL32(215, 185, 60, 255),  P_KEY,       "Touche" },
+    { Cat_Condition, "Condition : Le joueur bouge ?",        "Bouge?",      IM_COL32(215, 185, 60, 255),  P_NONE,      nullptr },
+    { Cat_Condition, "Condition : Cet objet touche le joueur maintenant ?", "Touche?", IM_COL32(215, 185, 60, 255), P_NONE, nullptr },
+    { Cat_Action,    "Action : Definir la vie",              "Vie =",       IM_COL32(70, 130, 210, 255),  P_AMOUNT,    "Vie" },
+    { Cat_Action,    "Action : Definir le score",            "Score =",     IM_COL32(70, 130, 210, 255),  P_AMOUNT,    "Score" },
+    { Cat_Action,    "Action : Retirer des points",          "-Score",      IM_COL32(70, 130, 210, 255),  P_AMOUNT,    "Points" },
+    { Cat_Action,    "Action : Remettre le score a zero",    "Score=0",     IM_COL32(70, 130, 210, 255),  P_NONE,      nullptr },
+    { Cat_Action,    "Action : Remettre la vie au maximum",  "Vie max",     IM_COL32(70, 130, 210, 255),  P_NONE,      nullptr },
+    { Cat_Action,    "Action : Cacher l'objet",              "Cacher",      IM_COL32(70, 130, 210, 255),  P_NONE,      nullptr },
+    { Cat_Action,    "Action : Afficher l'objet",            "Afficher",    IM_COL32(70, 130, 210, 255),  P_NONE,      nullptr },
+    { Cat_Action,    "Action : Alterner visible / invisible", "Bascule vis.", IM_COL32(70, 130, 210, 255), P_NONE,     nullptr },
+    { Cat_Action,    "Action : Bloquer les controles du joueur", "Gel joueur", IM_COL32(70, 130, 210, 255), P_NONE,    nullptr },
+    { Cat_Action,    "Action : Debloquer les controles du joueur", "Degel joueur", IM_COL32(70, 130, 210, 255), P_NONE, nullptr },
+    { Cat_Action,    "Action : Regler le metallique",        "Metal =",     IM_COL32(70, 130, 210, 255),  P_AMOUNT,    "Metallique (0-1)" },
+    { Cat_Action,    "Action : Regler la rugosite",          "Rugosite =",  IM_COL32(70, 130, 210, 255),  P_AMOUNT,    "Rugosite (0-1)" },
+    { Cat_Action,    "Action : Regler l'intensite emissive", "Emissif =",   IM_COL32(70, 130, 210, 255),  P_AMOUNT,    "Intensite" },
+    { Cat_Action,    "Action : Regler l'intensite de la lumiere", "Lum. =", IM_COL32(70, 130, 210, 255),  P_AMOUNT,    "Intensite" },
+    { Cat_Action,    "Action : Regler la portee de la lumiere", "Portee =", IM_COL32(70, 130, 210, 255),  P_AMOUNT,    "Portee" },
+    { Cat_Variable,  "Maths : Multiplier une variable",      "Var x N",     IM_COL32(80, 175, 100, 255),  P_VAR_NUM,   "Variable / valeur" },
+    { Cat_Variable,  "Maths : Diviser une variable",         "Var / N",     IM_COL32(80, 175, 100, 255),  P_VAR_NUM,   "Variable / valeur" },
+    { Cat_Variable,  "Variable : Copier la vie dedans",      "Var=Vie",     IM_COL32(80, 175, 100, 255),  P_VARNAME,   "Nom de la variable" },
+    { Cat_Variable,  "Variable : Copier le score dedans",    "Var=Score",   IM_COL32(80, 175, 100, 255),  P_VARNAME,   "Nom de la variable" },
+    { Cat_Variable,  "Variable : Copier la distance au joueur dedans", "Var=Dist", IM_COL32(80, 175, 100, 255), P_VARNAME, "Nom de la variable" },
+    { Cat_Action,    "Action : Teleporter cet objet vers le joueur", "TP->Joueur", IM_COL32(70, 130, 210, 255), P_NONE, nullptr },
+    { Cat_Action,    "Action : Teleporter le joueur vers cet objet", "TP<-Joueur", IM_COL32(70, 130, 210, 255), P_NONE, nullptr },
+    { Cat_Action,    "Action : Inverser la gravite",         "Gravite inv.", IM_COL32(70, 130, 210, 255), P_NONE,      nullptr },
+    { Cat_Action,    "Action : Faire sauter le joueur",      "Sauter",      IM_COL32(70, 130, 210, 255),  P_NONE,      nullptr },
+    { Cat_Action,    "Action : Arreter net le joueur",       "Stop joueur", IM_COL32(70, 130, 210, 255),  P_NONE,      nullptr },
+    { Cat_Action,    "Action : Pousser le joueur",           "Pousser",     IM_COL32(70, 130, 210, 255),  P_VEC,       "Force (x, y, z)" },
+    { Cat_Action,    "Action : Definir la position de cet objet", "Pos =",  IM_COL32(70, 130, 210, 255),  P_VEC,       "Position" },
+    { Cat_Action,    "Action : Definir la rotation de cet objet", "Rot =",  IM_COL32(70, 130, 210, 255),  P_VEC,       "Rotation (degres)" },
+    { Cat_Action,    "Action : Regler la force de saut du joueur", "Saut =", IM_COL32(70, 130, 210, 255), P_AMOUNT,    "Force" },
 };
 static const int NODE_TYPE_COUNT = (int)(sizeof(NODE_TYPES) / sizeof(NODE_TYPES[0]));
 
@@ -295,6 +380,7 @@ struct SceneObject {
     // Etat de jeu (remis a zero quand on arrete le jeu)
     bool destroyed = false;
     bool touching = false;
+    bool hidden = false; // masque l'objet sans le detruire (collision/logique intactes)
 };
 
 static int TextEditCallback(ImGuiInputTextCallbackData* data) {
@@ -334,6 +420,7 @@ struct PlayState {
     int score = 0;
     float playerSpeed = 6.0f;
     float gravityForce = 20.0f;
+    float jumpForce = 8.0f;
     bool won = false;
     bool gravity = true;
     int activeCamera = -1;      // objet Camera qui donne la vue (-1 = vue par defaut)
@@ -599,7 +686,7 @@ public:
         if (m_ViewMode == 2) WEngine::Renderer::SetWireframe(true);
         for (int i = 0; i < (int)m_Objects.size(); i++) {
             auto& obj = m_Objects[i];
-            if (obj.destroyed) continue;
+            if (obj.destroyed || obj.hidden) continue;
             if (obj.shape == Shape_Text) continue; // rendu en overlay 2D (OnImGuiRender)
             if (obj.shape == Shape_Camera) {
                 if (i == skipCamera) continue;
@@ -873,6 +960,9 @@ public:
         f << "light " << m_LightDir.x << " " << m_LightDir.y << " " << m_LightDir.z << "\n";
         f << "lightcol " << m_LightColor.x << " " << m_LightColor.y << " " << m_LightColor.z << "\n";
         f << "ambient " << m_Ambient << "\n";
+        f << "playermodel " << m_PlayerModelPath << "\n";
+        f << "playertint " << m_PlayerTint.x << " " << m_PlayerTint.y << " " << m_PlayerTint.z << "\n";
+        f << "playerscale " << m_PlayerScale << "\n";
         for (const auto& o : m_Objects) {
             f << "OBJECT\n";
             f << "name " << o.name << "\n";
@@ -923,6 +1013,9 @@ public:
                 else if (key == "light") ss >> m_LightDir.x >> m_LightDir.y >> m_LightDir.z;
                 else if (key == "lightcol") ss >> m_LightColor.x >> m_LightColor.y >> m_LightColor.z;
                 else if (key == "ambient") ss >> m_Ambient;
+                else if (key == "playermodel") m_PlayerModelPath = rest();
+                else if (key == "playertint") ss >> m_PlayerTint.x >> m_PlayerTint.y >> m_PlayerTint.z;
+                else if (key == "playerscale") ss >> m_PlayerScale;
                 continue;
             }
 
@@ -969,8 +1062,9 @@ public:
         m_SavedObjects = m_Objects;   // instantane : l'arret restaure tout
         m_Play = PlayState{};
         m_Pending.clear();
+        m_PlayerFrozen = false;
 
-        for (auto& o : m_Objects) { o.destroyed = false; o.touching = false; }
+        for (auto& o : m_Objects) { o.destroyed = false; o.touching = false; o.hidden = false; }
 
         // Le personnage n'apparait que s'il y a un "Depart Joueur" pose dans
         // la scene (comme le PlayerStart d'Unreal) : sinon pas de personnage
@@ -1107,8 +1201,9 @@ public:
         if (m_RestartRequested) {
             m_RestartRequested = false;
             m_Objects = m_SavedObjects;
-            for (auto& o : m_Objects) { o.destroyed = false; o.touching = false; }
+            for (auto& o : m_Objects) { o.destroyed = false; o.touching = false; o.hidden = false; }
             m_Pending.clear();
+            m_PlayerFrozen = false;
             m_Play.life = 3;
             m_Play.vars.clear();
             m_Play.activeCamera = -1;
@@ -1121,11 +1216,16 @@ public:
         }
     }
 
-    bool KeyMatches(const std::string& s, int keyCode) const {
+    static int KeyCodeFor(const std::string& s) {
         char c = s.empty() ? 'E' : (char)std::toupper((unsigned char)s[0]);
-        if (c >= 'A' && c <= 'Z') return keyCode == (GLFW_KEY_A + (c - 'A'));
-        if (c >= '0' && c <= '9') return keyCode == (GLFW_KEY_0 + (c - '0'));
-        return false;
+        if (c >= 'A' && c <= 'Z') return GLFW_KEY_A + (c - 'A');
+        if (c >= '0' && c <= '9') return GLFW_KEY_0 + (c - '0');
+        return -1;
+    }
+
+    bool KeyMatches(const std::string& s, int keyCode) const {
+        int key = KeyCodeFor(s);
+        return key >= 0 && keyCode == key;
     }
 
     void FireEvent(int objIndex, int eventType, int keyCode = -1) {
@@ -1156,6 +1256,7 @@ public:
             if (cat == Cat_Event) return;               // debut d'une autre chaine
             if (cat == Cat_Condition) {
                 m_CondObjectPos = m_Objects[objIndex].position;
+                m_CondObjectTouching = m_Objects[objIndex].touching;
                 if (!EvalCondition(node)) return;       // condition fausse : on arrete la
                 continue;
             }
@@ -1191,6 +1292,32 @@ public:
                 float v = (it == m_Play.vars.end()) ? 0.0f : it->second;
                 return std::fabs(v - node.a) < 0.0001f;
             }
+            case N_COND_LIFE_LE:  return m_Play.life <= (int)node.a;
+            case N_COND_LIFE_GE:  return m_Play.life >= (int)node.a;
+            case N_COND_SCORE_GE: return m_Play.score >= (int)node.a;
+            case N_COND_SCORE_LE: return m_Play.score <= (int)node.a;
+            case N_COND_VAR_GT: {
+                auto it = m_Play.vars.find(node.sparam);
+                return (it == m_Play.vars.end() ? 0.0f : it->second) > node.a;
+            }
+            case N_COND_VAR_LT: {
+                auto it = m_Play.vars.find(node.sparam);
+                return (it == m_Play.vars.end() ? 0.0f : it->second) < node.a;
+            }
+            case N_COND_VAR_GE: {
+                auto it = m_Play.vars.find(node.sparam);
+                return (it == m_Play.vars.end() ? 0.0f : it->second) >= node.a;
+            }
+            case N_COND_VAR_LE: {
+                auto it = m_Play.vars.find(node.sparam);
+                return (it == m_Play.vars.end() ? 0.0f : it->second) <= node.a;
+            }
+            case N_COND_KEY_HELD: {
+                int key = KeyCodeFor(node.sparam);
+                return key >= 0 && WEngine::Input::IsKeyPressed(key);
+            }
+            case N_COND_MOVING:       return m_PlayerMoving;
+            case N_COND_TOUCHING_NOW: return m_CondObjectTouching;
             default: return true;
         }
     }
@@ -1356,6 +1483,50 @@ public:
                 m_PlayerVelY = 0.0f;
                 m_PlayerVelXZ = { 0.0f, 0.0f, 0.0f };
                 break;
+            case N_ACT_SET_LIFE:   m_Play.life = (int)node.a; break;
+            case N_ACT_SET_SCORE:  m_Play.score = (int)node.a; break;
+            case N_ACT_SUB_SCORE:  m_Play.score -= (int)(node.a != 0.0f ? node.a : 1.0f); break;
+            case N_ACT_RESET_SCORE: m_Play.score = 0; break;
+            case N_ACT_FULL_HEAL:  m_Play.life = 3; break;
+            case N_ACT_HIDE_OBJECT:   obj.hidden = true; break;
+            case N_ACT_SHOW_OBJECT:   obj.hidden = false; break;
+            case N_ACT_TOGGLE_VISIBLE: obj.hidden = !obj.hidden; break;
+            case N_ACT_FREEZE_PLAYER:   m_PlayerFrozen = true; break;
+            case N_ACT_UNFREEZE_PLAYER: m_PlayerFrozen = false; break;
+            case N_ACT_SET_METALLIC:  obj.metallic = Clamp01(node.a); break;
+            case N_ACT_SET_ROUGHNESS: obj.roughness = Clamp01(node.a) < 0.02f ? 0.02f : Clamp01(node.a); break;
+            case N_ACT_SET_EMISSIVE:  obj.emissiveStrength = node.a; break;
+            case N_ACT_SET_LIGHT_INTENSITY: obj.lightIntensity = node.a; break;
+            case N_ACT_SET_LIGHT_RANGE:     obj.lightRadius = node.a; break;
+            case N_MATH_MUL: m_Play.vars[node.sparam] *= node.a; break;
+            case N_MATH_DIV: if (node.a != 0.0f) m_Play.vars[node.sparam] /= node.a; break;
+            case N_VAR_FROM_LIFE:  m_Play.vars[node.sparam] = (float)m_Play.life; break;
+            case N_VAR_FROM_SCORE: m_Play.vars[node.sparam] = (float)m_Play.score; break;
+            case N_VAR_FROM_DIST_PLAYER: {
+                WEngine::Vec3 d = m_PlayerPos - obj.position;
+                m_Play.vars[node.sparam] = std::sqrt(WEngine::Vec3::Dot(d, d));
+                break;
+            }
+            case N_ACT_TP_TO_PLAYER:   obj.position = m_PlayerPos; break;
+            case N_ACT_TP_PLAYER_HERE: m_PlayerPos = obj.position; m_PlayerVelY = 0.0f; break;
+            case N_ACT_INVERT_GRAVITY: m_Play.gravityForce = -m_Play.gravityForce; break;
+            case N_ACT_JUMP:
+                m_PlayerVelY = m_Play.jumpForce;
+                m_PlayerGrounded = false;
+                break;
+            case N_ACT_STOP_PLAYER:
+                m_PlayerVelXZ = { 0.0f, 0.0f, 0.0f };
+                m_PlayerVelY = 0.0f;
+                break;
+            case N_ACT_PUSH_PLAYER:
+                m_PlayerVelXZ.x += node.vec.x;
+                m_PlayerVelXZ.z += node.vec.z;
+                m_PlayerVelY += node.vec.y;
+                if (node.vec.y != 0.0f) m_PlayerGrounded = false;
+                break;
+            case N_ACT_SET_POSITION: obj.position = node.vec; break;
+            case N_ACT_SET_ROTATION: obj.rotationEuler = node.vec; break;
+            case N_ACT_SET_JUMP_FORCE: m_Play.jumpForce = node.a; break;
             default: break;
         }
         return true;
@@ -1421,7 +1592,7 @@ public:
         WEngine::Vec3 right = m_Camera.Right(); right.y = 0.0f; right = right.Normalized();
 
         WEngine::Vec3 move{ 0.0f, 0.0f, 0.0f };
-        if (!uiHasMouse) {
+        if (!uiHasMouse && !m_PlayerFrozen) {
             if (WEngine::Input::IsKeyPressed(GLFW_KEY_W)) move = move + fwd;
             if (WEngine::Input::IsKeyPressed(GLFW_KEY_S)) move = move - fwd;
             if (WEngine::Input::IsKeyPressed(GLFW_KEY_D)) move = move + right;
@@ -1471,18 +1642,17 @@ public:
             m_WalkCycle += dt * (4.0f + moveSpeed * 1.4f);
         }
 
-        const float JUMP_SPEED = 8.0f;
         bool wasGrounded = m_PlayerGrounded;
 
         // Coyote time + memorisation du saut : le saut part meme si on
         // appuie un peu trop tot ou juste apres avoir quitte le sol.
-        bool spaceDown = !uiHasMouse && WEngine::Input::IsKeyPressed(GLFW_KEY_SPACE);
+        bool spaceDown = !uiHasMouse && !m_PlayerFrozen && WEngine::Input::IsKeyPressed(GLFW_KEY_SPACE);
         if (spaceDown && !m_SpaceWasDown) m_JumpBuffer = 0.12f;
         m_SpaceWasDown = spaceDown;
         m_CoyoteTimer = m_PlayerGrounded ? 0.12f : std::fmax(0.0f, m_CoyoteTimer - dt);
         m_JumpBuffer = std::fmax(0.0f, m_JumpBuffer - dt);
         if (m_JumpBuffer > 0.0f && m_CoyoteTimer > 0.0f) {
-            m_PlayerVelY = JUMP_SPEED;
+            m_PlayerVelY = m_Play.jumpForce;
             m_PlayerGrounded = false;
             m_JumpBuffer = 0.0f;
             m_CoyoteTimer = 0.0f;
@@ -1550,7 +1720,26 @@ public:
 
     void DrawPlayer() {
         WEngine::Mat4 base = WEngine::Mat4::Multiply(
-            WEngine::Mat4::Translate(m_PlayerPos), WEngine::Mat4::RotateY(m_PlayerFacingYaw));
+            WEngine::Mat4::Multiply(WEngine::Mat4::Translate(m_PlayerPos), WEngine::Mat4::RotateY(m_PlayerFacingYaw)),
+            WEngine::Mat4::Scale({ m_PlayerScale, m_PlayerScale, m_PlayerScale }));
+
+        // Modele .obj importe (fait dans Blender par ex.) a la place du
+        // petit bonhomme procedural, si on en a choisi un dans "Parametres
+        // du monde > Personnage".
+        if (!m_PlayerModelPath.empty()) {
+            WEngine::Mesh* mesh = GetModel(m_PlayerModelPath);
+            if (mesh) {
+                m_Shader->SetInt(m_LocLit, 1);
+                m_Shader->SetInt(m_LocUseTex, 0);
+                m_Shader->SetFloat3(m_LocTint, m_PlayerTint.x, m_PlayerTint.y, m_PlayerTint.z);
+                m_Shader->SetFloat("u_Metallic", 0.0f);
+                m_Shader->SetFloat("u_Roughness", 0.6f);
+                m_Shader->SetFloat3("u_Emissive", 0.0f, 0.0f, 0.0f);
+                SetModel(base);
+                mesh->Draw();
+                return;
+            }
+        }
 
         float squashY = 1.0f, squashXZ = 1.0f;
         if (m_SquashTimer > 0.0f) {
@@ -1565,7 +1754,12 @@ public:
         float armSwing = -legSwing;
         float headBob = m_PlayerMoving ? std::fabs(std::sin(m_WalkCycle * 2.0f)) * 0.05f : std::sin(m_Time * 1.2f) * 0.02f;
 
-        WEngine::Vec3 skin(0.95f, 0.8f, 0.65f), shirt(0.3f, 0.55f, 0.9f), pants(0.25f, 0.3f, 0.4f);
+        auto tinted = [&](WEngine::Vec3 c) {
+            return WEngine::Vec3(c.x * m_PlayerTint.x, c.y * m_PlayerTint.y, c.z * m_PlayerTint.z);
+        };
+        WEngine::Vec3 skin = tinted({ 0.95f, 0.8f, 0.65f });
+        WEngine::Vec3 shirt = tinted({ 0.3f, 0.55f, 0.9f });
+        WEngine::Vec3 pants = tinted({ 0.25f, 0.3f, 0.4f });
 
         DrawPart(base, { 0.0f, 0.0f, 0.0f }, { 0.5f * squashXZ, 0.95f * squashY, 0.5f * squashXZ }, shirt, m_Cylinder.get());
         DrawPart(base, { 0.0f, 0.78f * squashY + headBob, 0.0f }, { 0.42f, 0.42f, 0.42f }, skin, m_Sphere.get());
@@ -2102,7 +2296,28 @@ public:
         if (ImGui::CollapsingHeader("Jeu", ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::DragFloat("Vitesse du joueur", &m_Play.playerSpeed, 0.1f, 0.5f, 40.0f);
             ImGui::DragFloat("Force de gravite", &m_Play.gravityForce, 0.5f, 0.0f, 80.0f);
+            ImGui::DragFloat("Force de saut", &m_Play.jumpForce, 0.2f, 1.0f, 30.0f);
             ImGui::TextDisabled("Ces valeurs peuvent aussi etre changees par des blocs Blueprint.");
+        }
+        if (ImGui::CollapsingHeader("Personnage", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::TextWrapped("A quoi ressemble le joueur pendant la partie (visible avec F5).");
+            ImGui::ColorEdit3("Couleur", &m_PlayerTint.x);
+            ImGui::DragFloat("Taille", &m_PlayerScale, 0.02f, 0.2f, 4.0f);
+            ImGui::Separator();
+            ImGui::TextDisabled("Modele 3D (sinon le petit bonhomme par defaut) :");
+            bool none = m_PlayerModelPath.empty();
+            if (ImGui::Selectable("Aucun (bonhomme par defaut)", none)) m_PlayerModelPath.clear();
+            if (m_AvailableModels.empty()) {
+                ImGui::TextDisabled("Aucun .obj dans /assets.");
+                ImGui::TextWrapped("Dans Blender : Fichier > Exporter > Wavefront (.obj), enregistre "
+                                   "le fichier dans le dossier assets/ a cote de WEngine.exe, puis "
+                                   "clique Rafraichir dans le Navigateur de contenu.");
+            } else {
+                for (auto& path : m_AvailableModels) {
+                    std::string label = fs::path(path).filename().string();
+                    if (ImGui::Selectable(label.c_str(), m_PlayerModelPath == path)) m_PlayerModelPath = path;
+                }
+            }
         }
         ImGui::End();
     }
@@ -2423,6 +2638,7 @@ public:
             case P_TEXT:      return node.sparam;
             case P_VEC:       snprintf(buf, sizeof(buf), "%.1f, %.1f, %.1f", node.vec.x, node.vec.y, node.vec.z); return buf;
             case P_VAR_NUM:   snprintf(buf, sizeof(buf), "%s = %.1f", node.sparam.empty() ? "var" : node.sparam.c_str(), node.a); return buf;
+            case P_VARNAME:   return node.sparam.empty() ? "var" : node.sparam;
             case P_VAR_RANGE: snprintf(buf, sizeof(buf), "%s : %.0f a %.0f", node.sparam.empty() ? "var" : node.sparam.c_str(), node.a, node.b); return buf;
             default: return std::string();
         }
@@ -2450,6 +2666,7 @@ public:
                 break;
             case P_TEXT:
             case P_KEY:
+            case P_VARNAME:
                 ImGui::InputText(info.paramLabel, (char*)node.sparam.c_str(), node.sparam.capacity() + 1,
                     ImGuiInputTextFlags_CallbackResize, TextEditCallback, &node.sparam);
                 break;
@@ -2542,12 +2759,20 @@ private:
     WEngine::Vec3 m_PlayerSpawn{ 0.0f, 1.0f, 6.0f };
     WEngine::Vec3 m_PlayerVelXZ{ 0.0f, 0.0f, 0.0f };
     WEngine::Vec3 m_CondObjectPos{ 0.0f, 0.0f, 0.0f };
+    bool m_CondObjectTouching = false;
+    bool m_PlayerFrozen = false; // "Bloquer les controles du joueur" (deplacement au clavier)
     float m_CoyoteTimer = 0.0f, m_JumpBuffer = 0.0f;
     bool m_SpaceWasDown = false;
     float m_PlayerVelY = 0.0f;
     bool m_PlayerGrounded = true;
     bool m_PlayerMoving = false;
     float m_PlayerFacingYaw = 0.0f;
+
+    // Apparence du personnage : par defaut le petit bonhomme procedural,
+    // ou un modele .obj importe de Blender si on en choisit un.
+    std::string m_PlayerModelPath;
+    WEngine::Vec3 m_PlayerTint{ 1.0f, 1.0f, 1.0f };
+    float m_PlayerScale = 1.0f;
     float m_WalkCycle = 0.0f;
     float m_SquashTimer = 0.0f;
 
