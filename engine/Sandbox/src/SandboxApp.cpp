@@ -264,8 +264,8 @@ struct BlueprintNode {
     WEngine::Vec3 vec{ 1.0f, 1.0f, 1.0f };
 };
 
-static const char* SHAPE_NAMES[] = { "Cube", "Sphere", "Cylindre", "Camera", "Texte", "Modele 3D", "Lumiere" };
-enum ShapeType { Shape_Cube = 0, Shape_Sphere = 1, Shape_Cylinder = 2, Shape_Camera = 3, Shape_Text = 4, Shape_Model = 5, Shape_Light = 6 };
+static const char* SHAPE_NAMES[] = { "Cube", "Sphere", "Cylindre", "Camera", "Texte", "Modele 3D", "Lumiere", "Depart Joueur" };
+enum ShapeType { Shape_Cube = 0, Shape_Sphere = 1, Shape_Cylinder = 2, Shape_Camera = 3, Shape_Text = 4, Shape_Model = 5, Shape_Light = 6, Shape_PlayerStart = 7 };
 
 struct SceneObject {
     std::string name;
@@ -417,7 +417,19 @@ public:
         camObj.shape = Shape_Camera;
         camObj.position = { -7.0f, 4.0f, 8.0f };   // plan large sur la scene
         camObj.rotationEuler = { -20.0f, -49.0f, 0.0f };
+        camObj.collision = false;
+        camObj.blueprint = DefaultBlueprint(Shape_Camera); // active et fixe des le debut de la partie
         m_Objects.push_back(camObj);
+
+        // Point d'apparition du joueur (comme le PlayerStart d'Unreal) :
+        // sans lui, Jouer (F5) ne fait apparaitre aucun personnage.
+        SceneObject startObj;
+        startObj.name = "Depart Joueur";
+        startObj.shape = Shape_PlayerStart;
+        startObj.position = { 0.0f, 0.0f, 6.0f };
+        startObj.rotationEuler = { 0.0f, 180.0f, 0.0f }; // regarde vers la scene
+        startObj.collision = false;
+        m_Objects.push_back(startObj);
 
         SceneObject textObj;
         textObj.name = "Texte 1";
@@ -457,8 +469,14 @@ public:
 
         if (shape == Shape_Camera) {
             add(N_EVT_BEGIN);
-            add(N_ACT_CAM_FOLLOW); // sans ce bloc, la camera ne suit rien
+            // Fixe par defaut, comme une vraie camera de jeu : elle ne bouge
+            // pas toute seule. Remplace ce bloc par "Suivre le joueur" si tu
+            // veux qu'elle bouge avec lui.
+            add(N_ACT_CAM_ACTIVATE);
             return bp;
+        }
+        if (shape == Shape_PlayerStart) {
+            return bp; // pas de logique par defaut : c'est juste un repere de position
         }
         if (shape == Shape_Text) {
             add(N_EVT_BEGIN);
@@ -523,6 +541,15 @@ public:
         }
 
         // 2) Vue principale
+        m_NoViewInPlay = m_PlayerMode && !m_PlayerHasCharacter && m_Play.activeCamera < 0;
+        if (m_NoViewInPlay) {
+            // Rien pour donner une vue (ni personnage, ni camera activee) :
+            // un ecran noir volontaire et explicite plutot qu'un rendu casse.
+            WEngine::Renderer::SetClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+            WEngine::Renderer::Clear();
+            return;
+        }
+
         WEngine::Renderer::SetClearColor(m_SkyColor.x, m_SkyColor.y, m_SkyColor.z, 1.0f);
         WEngine::Renderer::Clear();
 
@@ -583,6 +610,11 @@ public:
                 DrawLightMarker(obj, !m_PlayerMode && i == m_Selected);
                 continue;
             }
+            if (obj.shape == Shape_PlayerStart) {
+                if (m_PlayerMode) continue; // juste un repere d'edition, invisible en jeu
+                DrawPlayerStartMarker(obj, i == m_Selected);
+                continue;
+            }
 
             WEngine::Mat4 rot = WEngine::Mat4::Multiply(
                 WEngine::Mat4::RotateY(m_Time * obj.rotationSpeed + obj.rotationEuler.y * DEG2RAD),
@@ -615,7 +647,7 @@ public:
             MeshFor(obj)->Draw();
         }
 
-        if (m_PlayerMode) {
+        if (m_PlayerMode && m_PlayerHasCharacter) {
             DrawPlayer();
         }
         if (m_ViewMode == 2) WEngine::Renderer::SetWireframe(false);
@@ -636,6 +668,32 @@ public:
         WEngine::Mat4 bulb = WEngine::Mat4::Multiply(WEngine::Mat4::Translate(obj.position), WEngine::Mat4::Scale({ 0.3f, 0.3f, 0.3f }));
         SetModel(bulb);
         m_Sphere->Draw();
+    }
+
+    // Repere du point d'apparition du joueur : une base + une fleche qui
+    // pointe dans la direction ou le personnage regardera en apparaissant.
+    void DrawPlayerStartMarker(const SceneObject& obj, bool selected) {
+        WEngine::Mat4 base = WEngine::Mat4::Multiply(
+            WEngine::Mat4::Translate(obj.position), WEngine::Mat4::RotateY(obj.rotationEuler.y * DEG2RAD));
+        WEngine::Vec3 tint = selected ? WEngine::Vec3(1.0f, 1.0f, 1.0f) : WEngine::Vec3(0.15f, 0.85f, 0.95f);
+
+        m_Shader->SetInt(m_LocLit, 0);
+        m_Shader->SetInt(m_LocUseTex, 0);
+        m_Shader->SetFloat3(m_LocTint, tint.x, tint.y, tint.z);
+
+        WEngine::Mat4 disc = WEngine::Mat4::Multiply(base, WEngine::Mat4::Scale({ 0.5f, 0.04f, 0.5f }));
+        SetModel(disc);
+        m_Cylinder->Draw();
+
+        WEngine::Mat4 arrow = WEngine::Mat4::Multiply(base, WEngine::Mat4::Multiply(
+            WEngine::Mat4::Translate({ 0.0f, 0.05f, -0.3f }), WEngine::Mat4::Scale({ 0.14f, 0.08f, 0.4f })));
+        SetModel(arrow);
+        m_Cube->Draw();
+
+        WEngine::Mat4 post = WEngine::Mat4::Multiply(base, WEngine::Mat4::Multiply(
+            WEngine::Mat4::Translate({ 0.0f, 0.9f, 0.0f }), WEngine::Mat4::Scale({ 0.18f, 1.8f, 0.18f })));
+        SetModel(post);
+        m_Cylinder->Draw();
     }
 
     void SetModel(const WEngine::Mat4& model) {
@@ -902,17 +960,34 @@ public:
     // ================= Moteur de Blueprint =============================
 
     void StartPlay() {
+        // La camera d'edition est restauree a l'arret (comme le PIE d'Unreal) :
+        // sinon elle reste figee la ou une camera de jeu fixe l'a laissee, et
+        // on peut se retrouver a l'editer depuis l'interieur du repere 3D de
+        // cette meme camera, ce qui casse completement l'affichage.
+        m_EditorCamBackup = m_Camera;
+
         m_SavedObjects = m_Objects;   // instantane : l'arret restaure tout
         m_Play = PlayState{};
         m_Pending.clear();
 
         for (auto& o : m_Objects) { o.destroyed = false; o.touching = false; }
 
-        m_PlayerSpawn = m_Camera.Position + m_Camera.Forward() * 3.0f;
-        m_PlayerSpawn.y = 1.0f;
+        // Le personnage n'apparait que s'il y a un "Depart Joueur" pose dans
+        // la scene (comme le PlayerStart d'Unreal) : sinon pas de personnage
+        // qui surgit n'importe ou devant la camera d'edition.
+        m_PlayerHasCharacter = false;
+        for (auto& o : m_Objects) {
+            if (o.destroyed || o.shape != Shape_PlayerStart) continue;
+            m_PlayerSpawn = o.position;
+            m_PlayerSpawn.y += 1.0f;
+            m_PlayerFacingYaw = o.rotationEuler.y * DEG2RAD;
+            m_PlayerHasCharacter = true;
+            break;
+        }
         m_PlayerPos = m_PlayerSpawn;
         m_PlayerVelY = 0.0f;
         m_PlayerGrounded = true;
+        m_PlayerVelXZ = { 0.0f, 0.0f, 0.0f };
         m_PlayerMode = true;
 
         for (int i = 0; i < (int)m_Objects.size(); i++) FireEvent(i, N_EVT_BEGIN);
@@ -925,6 +1000,7 @@ public:
         m_Pending.clear();
         m_Play = PlayState{};
         m_PlayerMode = false;
+        m_Camera = m_EditorCamBackup; // on retrouve la vue d'edition d'avant le Jouer
         if (m_Selected >= (int)m_Objects.size()) m_Selected = -1;
         if (m_ScriptTarget >= (int)m_Objects.size()) { m_ScriptTarget = -1; m_ShowScriptEditor = false; }
     }
@@ -939,7 +1015,7 @@ public:
     }
 
     bool PlayerTouches(const SceneObject& obj) const {
-        if (obj.shape == Shape_Camera || obj.shape == Shape_Text || obj.shape == Shape_Light) return false;
+        if (obj.shape == Shape_Camera || obj.shape == Shape_Text || obj.shape == Shape_Light || obj.shape == Shape_PlayerStart) return false;
         if (!obj.collision) return false;
         // Marge un peu plus large que celle du blocage (CollidesAt), sinon le
         // joueur s'arrete pile au bord sans jamais "toucher" l'objet.
@@ -1295,7 +1371,7 @@ public:
         float best = VOID_Y;
         for (auto& obj : m_Objects) {
             if (obj.destroyed || !obj.collision) continue;
-            if (obj.shape == Shape_Camera || obj.shape == Shape_Text || obj.shape == Shape_Light) continue;
+            if (obj.shape == Shape_Camera || obj.shape == Shape_Text || obj.shape == Shape_Light || obj.shape == Shape_PlayerStart) continue;
             float halfX = std::fabs(obj.scale.x) * 0.5f, halfZ = std::fabs(obj.scale.z) * 0.5f;
             if (x >= obj.position.x - halfX && x <= obj.position.x + halfX &&
                 z >= obj.position.z - halfZ && z <= obj.position.z + halfZ) {
@@ -1319,7 +1395,7 @@ public:
         float head = centerY + PLAYER_HALF_HEIGHT;
         for (auto& obj : m_Objects) {
             if (obj.destroyed || !obj.collision) continue;
-            if (obj.shape == Shape_Camera || obj.shape == Shape_Text || obj.shape == Shape_Light) continue;
+            if (obj.shape == Shape_Camera || obj.shape == Shape_Text || obj.shape == Shape_Light || obj.shape == Shape_PlayerStart) continue;
             float halfX = std::fabs(obj.scale.x) * 0.5f + PLAYER_RADIUS;
             float halfZ = std::fabs(obj.scale.z) * 0.5f + PLAYER_RADIUS;
             float minY = obj.position.y - std::fabs(obj.scale.y) * 0.5f;
@@ -1335,6 +1411,7 @@ public:
     }
 
     void UpdatePlayer(WEngine::Timestep ts, bool uiHasMouse) {
+        if (!m_PlayerHasCharacter) return; // pas de "Depart Joueur" : rien a deplacer
         bool freeLook = (m_Play.activeCamera < 0 || m_Play.cameraFollows);
         if (!uiHasMouse && freeLook) {
             m_Camera.OnUpdateLookOnly(ts);
@@ -1794,8 +1871,9 @@ public:
             obj.tint = { 0.8f, 0.8f, 0.8f };
             obj.shape = m_NewShape;
             if (m_NewShape == Shape_Text) obj.text = "Nouveau texte";
-            if (m_NewShape == Shape_Camera || m_NewShape == Shape_Text || m_NewShape == Shape_Light) obj.collision = false;
+            if (m_NewShape == Shape_Camera || m_NewShape == Shape_Text || m_NewShape == Shape_Light || m_NewShape == Shape_PlayerStart) obj.collision = false;
             if (m_NewShape == Shape_Light) obj.tint = { 1.0f, 0.92f, 0.75f }; // blanc chaud par defaut
+            if (m_NewShape == Shape_PlayerStart) obj.position.y = 0.0f;
             m_Objects.push_back(obj);
             m_Selected = (int)m_Objects.size() - 1;
         }
@@ -1823,7 +1901,7 @@ public:
 
         if (ImGui::CollapsingHeader("Transformation", ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::DragFloat3("Emplacement", &obj.position.x, 0.05f);
-            if (obj.shape == Shape_Camera) {
+            if (obj.shape == Shape_Camera || obj.shape == Shape_PlayerStart) {
                 ImGui::DragFloat("Rotation X (pitch)", &obj.rotationEuler.x, 0.5f, -89.0f, 89.0f);
                 ImGui::DragFloat("Rotation Y (yaw)", &obj.rotationEuler.y, 0.5f);
             } else if (obj.shape != Shape_Light) {
@@ -1859,6 +1937,15 @@ public:
                 ImGui::EndDisabled();
                 ImGui::TextWrapped("Pour que cette camera serve en jeu, son Blueprint doit contenir "
                                    "\"Suivre le joueur\" (camera qui suit) ou \"Activer cette camera\" (camera fixe).");
+            }
+        }
+
+        if (obj.shape == Shape_PlayerStart) {
+            if (ImGui::CollapsingHeader("Depart Joueur", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::TextWrapped("C'est ici que le personnage apparait quand tu appuies sur Jouer (F5). "
+                                   "La rotation Y donne la direction dans laquelle il regarde en arrivant. "
+                                   "S'il n'y a aucun \"Depart Joueur\" dans la scene, le jeu se lance sans "
+                                   "personnage controlable (utile pour une scene juste filmee par une camera).");
             }
         }
 
@@ -2038,6 +2125,18 @@ public:
     // Labels "Texte" du monde 3D + HUD du jeu, dessines par-dessus tout.
     void DrawWorldOverlay() {
         ImDrawList* fg = ImGui::GetForegroundDrawList();
+
+        if (m_NoViewInPlay) {
+            const char* msg1 = "Aucune vue de jeu";
+            const char* msg2 = "Ajoute un \"Depart Joueur\" (personnage) ou active une Camera";
+            const char* msg3 = "avec un bloc Blueprint \"Activer cette camera\" pour lancer le jeu.";
+            ImVec2 s1 = ImGui::CalcTextSize(msg1), s2 = ImGui::CalcTextSize(msg2), s3 = ImGui::CalcTextSize(msg3);
+            float cx = m_ViewportW * 0.5f, cy = m_ViewportH * 0.5f;
+            fg->AddText(nullptr, 30.0f, ImVec2(cx - s1.x * 0.5f, cy - 40.0f), IM_COL32(255, 90, 90, 255), msg1);
+            fg->AddText(nullptr, 18.0f, ImVec2(cx - s2.x * 0.5f, cy + 4.0f), IM_COL32(220, 220, 220, 255), msg2);
+            fg->AddText(nullptr, 18.0f, ImVec2(cx - s3.x * 0.5f, cy + 26.0f), IM_COL32(220, 220, 220, 255), msg3);
+            return;
+        }
 
         for (auto& obj : m_Objects) {
             if (obj.destroyed || obj.shape != Shape_Text) continue;
@@ -2399,6 +2498,7 @@ private:
     int m_NextId = 5;
     int m_NewShape = Shape_Cube;
     WEngine::Camera m_Camera;
+    WEngine::Camera m_EditorCamBackup; // pose de la camera d'edition avant Jouer
     float m_Time = 0.0f;
     float m_LastFrameTime = 0.0f;
     float m_FrameDt = 0.0f;
@@ -2436,6 +2536,8 @@ private:
     bool m_RestartRequested = false;
 
     bool m_PlayerMode = false;
+    bool m_PlayerHasCharacter = false; // un "Depart Joueur" existe-t-il dans la scene ?
+    bool m_NoViewInPlay = false;       // ni personnage ni camera active : ecran noir volontaire
     WEngine::Vec3 m_PlayerPos{ 0.0f, 1.0f, 6.0f };
     WEngine::Vec3 m_PlayerSpawn{ 0.0f, 1.0f, 6.0f };
     WEngine::Vec3 m_PlayerVelXZ{ 0.0f, 0.0f, 0.0f };
