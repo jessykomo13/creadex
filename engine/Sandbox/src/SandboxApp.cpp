@@ -1073,7 +1073,7 @@ public:
         for (auto& o : m_Objects) {
             if (o.destroyed || o.shape != Shape_PlayerStart) continue;
             m_PlayerSpawn = o.position;
-            m_PlayerSpawn.y += 1.0f;
+            m_PlayerSpawn.y += PlayerHalfHeight();
             m_PlayerFacingYaw = o.rotationEuler.y * DEG2RAD;
             m_PlayerHasCharacter = true;
             break;
@@ -1114,12 +1114,12 @@ public:
         // Marge un peu plus large que celle du blocage (CollidesAt), sinon le
         // joueur s'arrete pile au bord sans jamais "toucher" l'objet.
         const float TOUCH_MARGIN = 0.15f;
-        float halfX = std::fabs(obj.scale.x) * 0.5f + PLAYER_RADIUS + TOUCH_MARGIN;
-        float halfZ = std::fabs(obj.scale.z) * 0.5f + PLAYER_RADIUS + TOUCH_MARGIN;
+        float halfX = std::fabs(obj.scale.x) * 0.5f + PlayerRadius() + TOUCH_MARGIN;
+        float halfZ = std::fabs(obj.scale.z) * 0.5f + PlayerRadius() + TOUCH_MARGIN;
         float minY = obj.position.y - std::fabs(obj.scale.y) * 0.5f - 0.2f;
         float maxY = obj.position.y + std::fabs(obj.scale.y) * 0.5f + 0.2f;
-        float feet = m_PlayerPos.y - PLAYER_HALF_HEIGHT;
-        float head = m_PlayerPos.y + PLAYER_HALF_HEIGHT;
+        float feet = m_PlayerPos.y - PlayerHalfHeight();
+        float head = m_PlayerPos.y + PlayerHalfHeight();
         if (head < minY || feet > maxY) return false;
         return m_PlayerPos.x > obj.position.x - halfX && m_PlayerPos.x < obj.position.x + halfX &&
                m_PlayerPos.z > obj.position.z - halfZ && m_PlayerPos.z < obj.position.z + halfZ;
@@ -1170,7 +1170,7 @@ public:
             } else if (m_Play.cameraFollows) {
                 // La camera se place derriere le joueur (l'objet Camera bouge
                 // vraiment : on le voit dans l'Outliner et les Details).
-                WEngine::Vec3 offset = m_Camera.Forward() * -5.0f + WEngine::Vec3(0.0f, 2.0f, 0.0f);
+                WEngine::Vec3 offset = m_Camera.Forward() * (-5.0f * m_PlayerScale) + WEngine::Vec3(0.0f, 2.0f * m_PlayerScale, 0.0f);
                 cam.position = m_PlayerPos + offset;
                 cam.rotationEuler.y = m_Camera.Yaw;
                 cam.rotationEuler.x = m_Camera.Pitch;
@@ -1547,14 +1547,38 @@ public:
             if (x >= obj.position.x - halfX && x <= obj.position.x + halfX &&
                 z >= obj.position.z - halfZ && z <= obj.position.z + halfZ) {
                 float topY = obj.position.y + obj.scale.y * 0.5f;
-                if (topY <= refY + 0.2f && topY > best) best = topY;
+                if (topY <= refY + 0.2f * m_PlayerScale && topY > best) best = topY;
             }
         }
         return best;
     }
 
-    static constexpr float PLAYER_RADIUS = 0.35f;
-    static constexpr float PLAYER_HALF_HEIGHT = 1.0f;
+    // La capsule de collision suit la Taille choisie dans "Personnage" :
+    // sinon un personnage agrandi/reduit semblait traverser les objets ou
+    // rester bloque dans le vide (son gabarit visuel ne correspondait plus
+    // du tout a la zone qui bloque vraiment ses deplacements).
+    // Plafond : le point le plus bas parmi les objets dont le dessous est
+    // au-dessus de refY (pour empecher de sauter a travers le sol d'une
+    // plateforme et de continuer sa course la-dedans).
+    float CeilingHeightAt(float x, float z, float refY) {
+        float best = 1e9f;
+        for (auto& obj : m_Objects) {
+            if (obj.destroyed || !obj.collision) continue;
+            if (obj.shape == Shape_Camera || obj.shape == Shape_Text || obj.shape == Shape_Light || obj.shape == Shape_PlayerStart) continue;
+            float halfX = std::fabs(obj.scale.x) * 0.5f, halfZ = std::fabs(obj.scale.z) * 0.5f;
+            if (x >= obj.position.x - halfX && x <= obj.position.x + halfX &&
+                z >= obj.position.z - halfZ && z <= obj.position.z + halfZ) {
+                float botY = obj.position.y - obj.scale.y * 0.5f;
+                if (botY >= refY - 0.05f * m_PlayerScale && botY < best) best = botY;
+            }
+        }
+        return best;
+    }
+
+    static constexpr float PLAYER_RADIUS_BASE = 0.35f;
+    static constexpr float PLAYER_HALF_HEIGHT_BASE = 1.0f;
+    float PlayerRadius() const { return PLAYER_RADIUS_BASE * m_PlayerScale; }
+    float PlayerHalfHeight() const { return PLAYER_HALF_HEIGHT_BASE * m_PlayerScale; }
     static constexpr int MAX_OBJECTS = 400;
     static constexpr int MAX_PENDING = 256;
 
@@ -1562,16 +1586,16 @@ public:
     // traverser) : ignore un objet si le joueur a deja les pieds au niveau
     // (ou au-dessus) de son sommet, pour pouvoir marcher dessus librement.
     bool CollidesAt(float x, float z, float centerY) {
-        float feet = centerY - PLAYER_HALF_HEIGHT;
-        float head = centerY + PLAYER_HALF_HEIGHT;
+        float feet = centerY - PlayerHalfHeight();
+        float head = centerY + PlayerHalfHeight();
         for (auto& obj : m_Objects) {
             if (obj.destroyed || !obj.collision) continue;
             if (obj.shape == Shape_Camera || obj.shape == Shape_Text || obj.shape == Shape_Light || obj.shape == Shape_PlayerStart) continue;
-            float halfX = std::fabs(obj.scale.x) * 0.5f + PLAYER_RADIUS;
-            float halfZ = std::fabs(obj.scale.z) * 0.5f + PLAYER_RADIUS;
+            float halfX = std::fabs(obj.scale.x) * 0.5f + PlayerRadius();
+            float halfZ = std::fabs(obj.scale.z) * 0.5f + PlayerRadius();
             float minY = obj.position.y - std::fabs(obj.scale.y) * 0.5f;
             float maxY = obj.position.y + std::fabs(obj.scale.y) * 0.5f;
-            if (feet >= maxY - 0.1f) continue; // deja dessus (ou au-dessus) : pas de collision laterale
+            if (feet >= maxY - 0.1f * m_PlayerScale) continue; // deja dessus (ou au-dessus) : pas de collision laterale
             if (head <= minY) continue;
             if (x > obj.position.x - halfX && x < obj.position.x + halfX &&
                 z > obj.position.z - halfZ && z < obj.position.z + halfZ) {
@@ -1663,16 +1687,27 @@ public:
         } else {
             m_PlayerVelY = 0.0f;
         }
-        float feetBefore = m_PlayerPos.y - PLAYER_HALF_HEIGHT;
+        float feetBefore = m_PlayerPos.y - PlayerHalfHeight();
+        float headBefore = m_PlayerPos.y + PlayerHalfHeight();
         m_PlayerPos.y += m_PlayerVelY * dt;
-        float feetAfter = m_PlayerPos.y - PLAYER_HALF_HEIGHT;
+        float feetAfter = m_PlayerPos.y - PlayerHalfHeight();
         float ground = SurfaceHeightAt(m_PlayerPos.x, m_PlayerPos.z, feetBefore);
         if (m_Play.gravity && feetAfter <= ground) {
-            m_PlayerPos.y = ground + PLAYER_HALF_HEIGHT;
+            m_PlayerPos.y = ground + PlayerHalfHeight();
             m_PlayerVelY = 0.0f;
             m_PlayerGrounded = true;
         } else if (m_Play.gravity) {
             m_PlayerGrounded = false;
+        }
+        if (m_PlayerVelY > 0.0f) {
+            // Plafond : cogner la tete contre le dessous d'une plateforme
+            // arrete la montee au lieu de continuer dedans.
+            float ceiling = CeilingHeightAt(m_PlayerPos.x, m_PlayerPos.z, headBefore);
+            float headNow = m_PlayerPos.y + PlayerHalfHeight();
+            if (headNow > ceiling) {
+                m_PlayerPos.y = ceiling - PlayerHalfHeight();
+                m_PlayerVelY = 0.0f;
+            }
         }
         if (!wasGrounded && m_PlayerGrounded) m_SquashTimer = 0.15f;
         if (m_SquashTimer > 0.0f) {
@@ -1691,7 +1726,10 @@ public:
         }
 
         if (freeLook) {
-            WEngine::Vec3 camOffset = m_Camera.Forward() * -5.0f + WEngine::Vec3(0.0f, 2.0f, 0.0f);
+            // La distance de la camera suit la Taille du personnage : sinon
+            // un personnage agrandi remplit tout l'ecran (camera "dans sa
+            // tete") et un personnage reduit parait minuscule et lointain.
+            WEngine::Vec3 camOffset = m_Camera.Forward() * (-5.0f * m_PlayerScale) + WEngine::Vec3(0.0f, 2.0f * m_PlayerScale, 0.0f);
             m_Camera.Position = m_PlayerPos + camOffset;
         }
     }
