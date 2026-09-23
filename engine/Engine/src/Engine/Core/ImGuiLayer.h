@@ -18,6 +18,14 @@ namespace WEngine {
 
         void Begin();
         void End();
+
+        // Zone centrale libre du dockspace (le viewport 3D, comme dans
+        // Unreal), en pixels fenetre, origine en haut a gauche. w = 0 tant
+        // que la premiere frame n'a pas ete construite.
+        static void GetViewportRect(float& x, float& y, float& w, float& h);
+
+    private:
+        static float s_ViewX, s_ViewY, s_ViewW, s_ViewH;
     };
 
 } // namespace WEngine

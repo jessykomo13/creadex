@@ -31,6 +31,10 @@ namespace WEngine {
         // origine en haut-gauche), pour le picking d'objets dans la scene.
         Ray ScreenPointToRay(float mouseX, float mouseY, float windowWidth, float windowHeight, float fovYRadians) const;
 
+        // A appeler quand un autre mode de navigation a pilote la camera :
+        // evite un saut de vue au prochain clic droit.
+        void ResetLook() { m_FirstLook = true; }
+
     private:
         bool m_FirstLook = true;
         float m_LastMouseX = 0.0f, m_LastMouseY = 0.0f;

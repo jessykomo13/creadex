@@ -11,6 +11,7 @@
 #include <sstream>
 #include <cctype>
 #include <algorithm>
+#include <cstring>
 
 #include <GLFW/glfw3.h>
 
@@ -352,6 +353,11 @@ struct BlueprintNode {
     std::string sparam;
     WEngine::Vec3 vec{ 1.0f, 1.0f, 1.0f };
     float timer = 0.0f; // etat d'execution (ex: "Toutes les X secondes"), jamais sauvegarde
+    // Fils d'execution (comme les broches blanches d'Unreal) : index du bloc
+    // suivant dans le Blueprint, -1 = rien de branche. Pour une condition,
+    // next = sortie "Vrai" et nextFalse = sortie "Faux".
+    int next = -1;
+    int nextFalse = -1;
 };
 
 static const char* SHAPE_NAMES[] = { "Cube", "Sphere", "Cylindre", "Camera", "Texte", "Modele 3D", "Lumiere", "Depart Joueur", "Point de passage" };
@@ -404,6 +410,9 @@ static const WEngine::Vec3 AXIS_Y(0.0f, 1.0f, 0.0f);
 static const WEngine::Vec3 AXIS_Z(0.0f, 0.0f, 1.0f);
 static const float GIZMO_LEN = 1.4f;
 static const float GIZMO_HANDLE_RADIUS = 0.4f;
+static const float BP_NODE_W = 230.0f;
+static const float BP_NODE_H = 66.0f;
+static const float BP_HEADER_H = 24.0f;
 
 static float Clamp01(float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
 
@@ -558,12 +567,82 @@ public:
         m_Objects.push_back(lightObj);
 
         RefreshContentList();
+        ResetUndoBaseline();
     }
 
     // --- Blueprints par defaut, adaptes au type d'objet ---------------
     // (une camera n'a rien a faire avec un piege : elle recoit une chaine
     // qui la rend reellement utile - elle devient la vue du jeu.)
     static std::vector<BlueprintNode> DefaultBlueprint(int shape) {
+        std::vector<BlueprintNode> bp = DefaultBlueprintNodes(shape);
+        LinkSequential(bp);
+        LayoutChains(bp);
+        return bp;
+    }
+
+    static int NodeCategory(const BlueprintNode& n) {
+        return (n.type >= 0 && n.type < NODE_TYPE_COUNT) ? NODE_TYPES[n.type].category : -1;
+    }
+
+    // Relie chaque bloc au suivant dans la liste, sauf quand le suivant est
+    // un evenement (debut d'une autre chaine). C'etait la regle d'execution
+    // avant les fils : les anciennes scenes gardent donc le meme comportement.
+    static void LinkSequential(std::vector<BlueprintNode>& bp) {
+        for (int i = 0; i < (int)bp.size(); i++) {
+            bp[i].next = -1;
+            bp[i].nextFalse = -1;
+            if (i + 1 < (int)bp.size() && NodeCategory(bp[i + 1]) != Cat_Event && NodeCategory(bp[i + 1]) >= 0) {
+                bp[i].next = i + 1;
+            }
+        }
+    }
+
+    // Un fil ne peut pas pointer hors du Blueprint ni vers un evenement (un
+    // evenement n'a pas de broche d'entree), et seule une condition a une
+    // sortie "Faux".
+    static void SanitizeLinks(std::vector<BlueprintNode>& bp) {
+        int n = (int)bp.size();
+        for (auto& node : bp) {
+            if (node.next < 0 || node.next >= n || NodeCategory(bp[node.next]) == Cat_Event) node.next = -1;
+            if (node.nextFalse < 0 || node.nextFalse >= n || NodeCategory(bp[node.nextFalse]) == Cat_Event) node.nextFalse = -1;
+            if (NodeCategory(node) != Cat_Condition) node.nextFalse = -1;
+        }
+    }
+
+    static void RemoveNode(std::vector<BlueprintNode>& bp, int index) {
+        if (index < 0 || index >= (int)bp.size()) return;
+        bp.erase(bp.begin() + index);
+        for (auto& node : bp) {
+            for (int* link : { &node.next, &node.nextFalse }) {
+                if (*link == index) *link = -1;
+                else if (*link > index) (*link)--;
+            }
+        }
+    }
+
+    // Place chaque chaine sur une ligne, de gauche a droite, comme un graphe
+    // Unreal (evenement a gauche, puis les blocs relies dans l'ordre).
+    // Au-dela de 3 blocs, la chaine continue sur la ligne du dessous pour
+    // rester lisible sans devoir dezoomer.
+    static void LayoutChains(std::vector<BlueprintNode>& bp) {
+        const int PER_ROW = 3;
+        int row = 0;
+        std::vector<bool> placed(bp.size(), false);
+        for (int i = 0; i < (int)bp.size(); i++) {
+            if (NodeCategory(bp[i]) != Cat_Event) continue;
+            int col = 0, cur = i;
+            while (cur >= 0 && cur < (int)bp.size() && !placed[cur]) {
+                placed[cur] = true;
+                if (col == PER_ROW) { col = 0; row++; }
+                bp[cur].pos = ImVec2(40.0f + col * (BP_NODE_W + 110.0f), 40.0f + row * 110.0f);
+                col++;
+                cur = bp[cur].next;
+            }
+            row += 2;
+        }
+    }
+
+    static std::vector<BlueprintNode> DefaultBlueprintNodes(int shape) {
         std::vector<BlueprintNode> bp;
         auto add = [&](int type) -> BlueprintNode& {
             BlueprintNode n;
@@ -606,6 +685,15 @@ public:
     }
 
     void OnUpdate(WEngine::Timestep ts) override {
+        // Le rendu 3D occupe uniquement la zone centrale (entre les panneaux),
+        // comme le viewport d'Unreal : avant, la scene etait dessinee sous
+        // les panneaux et une partie restait cachee derriere eux.
+        auto& window = WEngine::Application::Get().GetWindow();
+        float vx, vy, vw, vh;
+        WEngine::ImGuiLayer::GetViewportRect(vx, vy, vw, vh);
+        if (vw < 16.0f || vh < 16.0f) { vx = 0.0f; vy = 0.0f; vw = (float)window.GetWidth(); vh = (float)window.GetHeight(); }
+        m_ViewX = vx; m_ViewY = vy; m_ViewportW = vw; m_ViewportH = vh;
+
         bool uiHasMouse = ImGui::GetIO().WantCaptureMouse;
         float dt = ts.GetSeconds();
         if (dt > 0.1f) dt = 0.1f; // evite un saut geant apres une pause
@@ -614,19 +702,13 @@ public:
             UpdatePlayer(ts, uiHasMouse);
             RunBlueprints(dt);
         } else {
-            if (!uiHasMouse) {
-                m_Camera.OnUpdate(ts);
-            }
-            UpdatePickingAndGizmo(uiHasMouse);
+            UpdateViewportInput(ts, uiHasMouse);
         }
 
         m_Time += dt;
         m_LastFrameTime = dt;
         if (m_StatusTimer > 0.0f) m_StatusTimer -= dt;
 
-        auto& window = WEngine::Application::Get().GetWindow();
-        m_ViewportW = (float)window.GetWidth();
-        m_ViewportH = (float)window.GetHeight();
 
         // 1) Apercu de la camera selectionnee, rendu hors-ecran (comme la
         //    petite fenetre d'apercu d'Unreal quand on selectionne une camera).
@@ -647,7 +729,7 @@ public:
             WEngine::Renderer::SetClearColor(m_SkyColor.x, m_SkyColor.y, m_SkyColor.z, 1.0f);
             WEngine::Renderer::Clear();
             RenderScene(pVP, previewCam.Position, m_Selected, false);
-            m_PreviewFB->Unbind((int)m_ViewportW, (int)m_ViewportH);
+            m_PreviewFB->Unbind(window.GetWidth(), window.GetHeight());
             m_PreviewValid = true;
         }
 
@@ -663,6 +745,8 @@ public:
 
         WEngine::Renderer::SetClearColor(m_SkyColor.x, m_SkyColor.y, m_SkyColor.z, 1.0f);
         WEngine::Renderer::Clear();
+        WEngine::Renderer::SetViewport((int)m_ViewX, (int)((float)window.GetHeight() - m_ViewY - m_ViewportH),
+                                       (int)m_ViewportW, (int)m_ViewportH);
 
         float aspect = m_ViewportW / m_ViewportH;
         WEngine::Mat4 proj = WEngine::Mat4::Perspective(FOV_Y, aspect, 0.1f, 150.0f);
@@ -705,24 +789,28 @@ public:
         m_Shader->SetFloat("u_Roughness", 1.0f);
         m_Shader->SetFloat3("u_Emissive", 0.0f, 0.0f, 0.0f);
         SetModel(WEngine::Mat4::Identity());
-        if (m_ShowGrid) m_Grid->Draw();
+        if (m_ShowGrid && !m_PlayerMode && !m_GameView) m_Grid->Draw();
 
         if (m_ViewMode == 2) WEngine::Renderer::SetWireframe(true);
         for (int i = 0; i < (int)m_Objects.size(); i++) {
             auto& obj = m_Objects[i];
             if (obj.destroyed || obj.hidden) continue;
             if (obj.shape == Shape_Text) continue; // rendu en overlay 2D (OnImGuiRender)
+            // Camera, lumiere et depart joueur sont des reperes d'edition :
+            // invisibles en jeu et en "Vue jeu" (touche G), comme dans Unreal.
+            bool editorIconsHidden = m_PlayerMode || m_GameView;
             if (obj.shape == Shape_Camera) {
-                if (i == skipCamera) continue;
-                DrawCameraMarker(obj, !m_PlayerMode && i == m_Selected);
+                if (i == skipCamera || editorIconsHidden) continue;
+                DrawCameraMarker(obj, i == m_Selected);
                 continue;
             }
             if (obj.shape == Shape_Light) {
-                DrawLightMarker(obj, !m_PlayerMode && i == m_Selected);
+                if (editorIconsHidden) continue;
+                DrawLightMarker(obj, i == m_Selected);
                 continue;
             }
             if (obj.shape == Shape_PlayerStart) {
-                if (m_PlayerMode) continue; // juste un repere d'edition, invisible en jeu
+                if (editorIconsHidden) continue;
                 DrawPlayerStartMarker(obj, i == m_Selected);
                 continue;
             }
@@ -769,8 +857,9 @@ public:
         }
         if (m_ViewMode == 2) WEngine::Renderer::SetWireframe(false);
 
-        if (withGizmoAndPlayer && !m_PlayerMode && m_Selected >= 0 && m_Selected < (int)m_Objects.size()
+        if (withGizmoAndPlayer && !m_PlayerMode && !m_GameView && m_Selected >= 0 && m_Selected < (int)m_Objects.size()
             && m_Objects[m_Selected].shape != Shape_Text) {
+            WEngine::Renderer::ClearDepth();
             DrawGizmo(m_Objects[m_Selected]);
         }
     }
@@ -922,25 +1011,50 @@ public:
         float clipW = m[3] * x + m[7] * y + m[11] * z + m[15];
         if (clipW <= 0.0001f) return false;
         float ndcX = clipX / clipW, ndcY = clipY / clipW;
-        outScreen.x = (ndcX * 0.5f + 0.5f) * m_ViewportW;
-        outScreen.y = (1.0f - (ndcY * 0.5f + 0.5f)) * m_ViewportH;
+        outScreen.x = m_ViewX + (ndcX * 0.5f + 0.5f) * m_ViewportW;
+        outScreen.y = m_ViewY + (1.0f - (ndcY * 0.5f + 0.5f)) * m_ViewportH;
         return true;
     }
 
 
     // ================= Historique / presse-papier =====================
 
-    void PushUndo() {
-        m_UndoStack.push_back(m_Objects);
+    // L'historique compare l'etat "valide" precedent a l'etat actuel une fois
+    // chaque geste termine (souris relachee, champ quitte, touche) : toute
+    // modification, d'ou qu'elle vienne (Details, Blueprint, gizmo, Navigateur
+    // de contenu...), devient ainsi annulable en une seule entree, comme
+    // dans Unreal.
+    void PushUndo() { m_UndoCheckNeeded = true; }
+
+    std::string SerializeObjects(const std::vector<SceneObject>& objs) const {
+        std::ostringstream ss;
+        for (const auto& o : objs) SerializeObject(ss, o);
+        return ss.str();
+    }
+
+    void CommitUndoIfChanged() {
+        if (m_PlayerMode) return;
+        std::string now = SerializeObjects(m_Objects);
+        if (now == m_CommittedText) return;
+        m_UndoStack.push_back(m_Committed);
         if (m_UndoStack.size() > 64) m_UndoStack.erase(m_UndoStack.begin());
         m_RedoStack.clear();
+        m_Committed = m_Objects;
+        m_CommittedText = now;
+    }
+
+    void ResetUndoBaseline() {
+        m_Committed = m_Objects;
+        m_CommittedText = SerializeObjects(m_Objects);
     }
 
     void Undo() {
+        CommitUndoIfChanged();
         if (m_UndoStack.empty()) { SetStatus("Rien a annuler"); return; }
         m_RedoStack.push_back(m_Objects);
         m_Objects = m_UndoStack.back();
         m_UndoStack.pop_back();
+        ResetUndoBaseline();
         ClampSelection();
         SetStatus("Annule");
     }
@@ -950,8 +1064,28 @@ public:
         m_UndoStack.push_back(m_Objects);
         m_Objects = m_RedoStack.back();
         m_RedoStack.pop_back();
+        ResetUndoBaseline();
         ClampSelection();
         SetStatus("Retabli");
+    }
+
+    // Nom unique facon Unreal : "Cube 3" duplique devient "Cube 4" (et non
+    // "Cube 3 (copie) (copie)").
+    std::string MakeUniqueName(const std::string& name) const {
+        std::string base = name;
+        size_t end = base.size();
+        while (end > 0 && std::isdigit((unsigned char)base[end - 1])) end--;
+        if (end < base.size() && end > 0 && base[end - 1] == ' ') base = base.substr(0, end - 1);
+        else if (end < base.size()) base = base.substr(0, end);
+        int best = 0;
+        for (const auto& o : m_Objects) {
+            if (o.name == base) { best = std::max(best, 1); continue; }
+            if (o.name.size() <= base.size() + 1 || o.name.compare(0, base.size() + 1, base + " ") != 0) continue;
+            std::string suffix = o.name.substr(base.size() + 1);
+            if (suffix.empty() || suffix.size() > 6 || !std::all_of(suffix.begin(), suffix.end(), [](char c) { return std::isdigit((unsigned char)c) != 0; })) continue;
+            best = std::max(best, std::atoi(suffix.c_str()));
+        }
+        return base + " " + std::to_string(best + 1);
     }
 
     void ClampSelection() {
@@ -969,7 +1103,7 @@ public:
         if (m_Selected < 0 || m_Selected >= (int)m_Objects.size()) return;
         PushUndo();
         SceneObject copy = m_Objects[m_Selected];
-        copy.name += " (copie)";
+        copy.name = MakeUniqueName(copy.name);
         copy.position.x += 1.0f;
         m_Objects.push_back(copy);
         m_Selected = (int)m_Objects.size() - 1;
@@ -988,6 +1122,7 @@ public:
         PushUndo();
         for (auto& o : m_Clipboard) {
             SceneObject copy = o;
+            copy.name = MakeUniqueName(copy.name);
             copy.position.x += 1.0f;
             m_Objects.push_back(copy);
         }
@@ -1011,7 +1146,7 @@ public:
     bool SaveScene(const std::string& path) {
         std::ofstream f(path);
         if (!f) { SetStatus("Impossible d'ecrire " + path); return false; }
-        f << "WENGINE_SCENE 2\n";
+        f << "WENGINE_SCENE 3\n";
         f << "sky " << m_SkyColor.x << " " << m_SkyColor.y << " " << m_SkyColor.z << "\n";
         f << "light " << m_LightDir.x << " " << m_LightDir.y << " " << m_LightDir.z << "\n";
         f << "lightcol " << m_LightColor.x << " " << m_LightColor.y << " " << m_LightColor.z << "\n";
@@ -1019,31 +1154,33 @@ public:
         f << "playermodel " << m_PlayerModelPath << "\n";
         f << "playertint " << m_PlayerTint.x << " " << m_PlayerTint.y << " " << m_PlayerTint.z << "\n";
         f << "playerscale " << m_PlayerScale << "\n";
-        for (const auto& o : m_Objects) {
-            f << "OBJECT\n";
-            f << "name " << o.name << "\n";
-            f << "shape " << o.shape << "\n";
-            f << "pos " << o.position.x << " " << o.position.y << " " << o.position.z << "\n";
-            f << "rot " << o.rotationEuler.x << " " << o.rotationEuler.y << " " << o.rotationEuler.z << "\n";
-            f << "scale " << o.scale.x << " " << o.scale.y << " " << o.scale.z << "\n";
-            f << "tint " << o.tint.x << " " << o.tint.y << " " << o.tint.z << "\n";
-            f << "rotspeed " << o.rotationSpeed << "\n";
-            f << "collision " << (o.collision ? 1 : 0) << "\n";
-            f << "texture " << o.texturePath << "\n";
-            f << "model " << o.modelPath << "\n";
-            f << "text " << o.text << "\n";
-            f << "material " << o.metallic << " " << o.roughness << " " << o.emissiveStrength << "\n";
-            f << "emissive " << o.emissive.x << " " << o.emissive.y << " " << o.emissive.z << "\n";
-            f << "lightparams " << o.lightIntensity << " " << o.lightRadius << "\n";
-            for (const auto& n : o.blueprint) {
-                f << "node " << n.type << " " << n.pos.x << " " << n.pos.y << " "
-                  << n.a << " " << n.b << " " << n.vec.x << " " << n.vec.y << " " << n.vec.z
-                  << " " << n.sparam << "\n";
-            }
-            f << "ENDOBJECT\n";
-        }
+        for (const auto& o : m_Objects) SerializeObject(f, o);
         SetStatus("Scene sauvegardee dans " + path);
         return true;
+    }
+
+    static void SerializeObject(std::ostream& f, const SceneObject& o) {
+        f << "OBJECT\n";
+        f << "name " << o.name << "\n";
+        f << "shape " << o.shape << "\n";
+        f << "pos " << o.position.x << " " << o.position.y << " " << o.position.z << "\n";
+        f << "rot " << o.rotationEuler.x << " " << o.rotationEuler.y << " " << o.rotationEuler.z << "\n";
+        f << "scale " << o.scale.x << " " << o.scale.y << " " << o.scale.z << "\n";
+        f << "tint " << o.tint.x << " " << o.tint.y << " " << o.tint.z << "\n";
+        f << "rotspeed " << o.rotationSpeed << "\n";
+        f << "collision " << (o.collision ? 1 : 0) << "\n";
+        f << "texture " << o.texturePath << "\n";
+        f << "model " << o.modelPath << "\n";
+        f << "text " << o.text << "\n";
+        f << "material " << o.metallic << " " << o.roughness << " " << o.emissiveStrength << "\n";
+        f << "emissive " << o.emissive.x << " " << o.emissive.y << " " << o.emissive.z << "\n";
+        f << "lightparams " << o.lightIntensity << " " << o.lightRadius << "\n";
+        for (const auto& n : o.blueprint) {
+            f << "node " << n.type << " " << n.pos.x << " " << n.pos.y << " "
+              << n.a << " " << n.b << " " << n.vec.x << " " << n.vec.y << " " << n.vec.z
+              << " " << n.next << " " << n.nextFalse << " " << n.sparam << "\n";
+        }
+        f << "ENDOBJECT\n";
     }
 
     bool LoadScene(const std::string& path) {
@@ -1053,17 +1190,29 @@ public:
         std::vector<SceneObject> loaded;
         SceneObject cur;
         bool inObject = false;
+        int version = 1;
         std::string line;
         while (std::getline(f, line)) {
             if (!line.empty() && line.back() == '\r') line.pop_back();
             if (line == "OBJECT") { cur = SceneObject{}; cur.blueprint.clear(); inObject = true; continue; }
-            if (line == "ENDOBJECT") { if (inObject) loaded.push_back(cur); inObject = false; continue; }
+            if (line == "ENDOBJECT") {
+                if (inObject) {
+                    // Avant la version 3, l'ordre des blocs faisait office de
+                    // fils : on recree exactement les memes liens.
+                    if (version < 3) LinkSequential(cur.blueprint);
+                    SanitizeLinks(cur.blueprint);
+                    loaded.push_back(cur);
+                }
+                inObject = false;
+                continue;
+            }
 
             std::istringstream ss(line);
             std::string key;
             ss >> key;
             auto rest = [&]() { std::string r; std::getline(ss, r); if (!r.empty() && r[0] == ' ') r.erase(0, 1); return r; };
 
+            if (key == "WENGINE_SCENE") { ss >> version; continue; }
             if (!inObject) {
                 if (key == "sky") ss >> m_SkyColor.x >> m_SkyColor.y >> m_SkyColor.z;
                 else if (key == "light") ss >> m_LightDir.x >> m_LightDir.y >> m_LightDir.z;
@@ -1092,12 +1241,14 @@ public:
             else if (key == "node") {
                 BlueprintNode n;
                 ss >> n.type >> n.pos.x >> n.pos.y >> n.a >> n.b >> n.vec.x >> n.vec.y >> n.vec.z;
+                if (version >= 3) ss >> n.next >> n.nextFalse;
                 n.sparam = rest();
                 if (n.type >= 0 && n.type < NODE_TYPE_COUNT) cur.blueprint.push_back(n);
             }
         }
 
         if (loaded.empty()) { SetStatus("Scene vide ou illisible : " + path); return false; }
+        CommitUndoIfChanged();
         PushUndo();
         m_Objects = loaded;
         ClampSelection();
@@ -1115,10 +1266,15 @@ public:
         // cette meme camera, ce qui casse completement l'affichage.
         m_EditorCamBackup = m_Camera;
 
+        CommitUndoIfChanged();
+        m_NavMode = Nav_None;
+        m_DraggingAxis = -1;
         m_SavedObjects = m_Objects;   // instantane : l'arret restaure tout
         m_Play = PlayState{};
         m_Pending.clear();
         m_PlayerFrozen = false;
+        m_LoopWarned = false;
+        m_ClearUiFocus = true;
 
         for (auto& o : m_Objects) { o.destroyed = false; o.touching = false; o.hidden = false; }
 
@@ -1151,8 +1307,10 @@ public:
         m_Play = PlayState{};
         m_PlayerMode = false;
         m_Camera = m_EditorCamBackup; // on retrouve la vue d'edition d'avant le Jouer
+        m_Camera.ResetLook();
         if (m_Selected >= (int)m_Objects.size()) m_Selected = -1;
         if (m_ScriptTarget >= (int)m_Objects.size()) { m_ScriptTarget = -1; m_ShowScriptEditor = false; }
+        ResetUndoBaseline();
     }
 
     void TogglePlay() {
@@ -1212,7 +1370,7 @@ public:
                 float interval = bp[j].a > 0.0f ? bp[j].a : 1.0f;
                 if (bp[j].timer >= interval) {
                     bp[j].timer -= interval;
-                    starts.push_back(j + 1);
+                    if (bp[j].next >= 0) starts.push_back(bp[j].next);
                 }
             }
             for (int s : starts) RunChain(i, s);
@@ -1309,38 +1467,49 @@ public:
         for (int i = 0; i < (int)bp.size(); i++) {
             if (bp[i].type != eventType) continue;
             if (eventType == N_EVT_KEY && !KeyMatches(bp[i].sparam, keyCode)) continue;
-            starts.push_back(i + 1);
+            if (bp[i].next >= 0) starts.push_back(bp[i].next);
         }
         for (int s : starts) RunChain(objIndex, s);
     }
 
-    // Execute a partir d'un bloc jusqu'a : la fin, le prochain evenement,
-    // une condition fausse, ou une attente.
+    // Suit les fils d'execution a partir d'un bloc jusqu'a : un fil vide, une
+    // attente (reprise plus tard), ou le garde-fou anti-boucle infinie.
     void RunChain(int objIndex, int start) {
-        for (int i = start;; i++) {
+        int cur = start;
+        for (int steps = 0; cur >= 0; steps++) {
             if (objIndex < 0 || objIndex >= (int)m_Objects.size()) return;
             if (m_Objects[objIndex].destroyed) return;
-            if (i >= (int)m_Objects[objIndex].blueprint.size()) return;
+            if (cur >= (int)m_Objects[objIndex].blueprint.size()) return;
+            if (steps >= MAX_CHAIN_STEPS) {
+                // Comme le "Infinite loop detected" d'Unreal : des fils qui
+                // tournent en rond sans "Attendre" gelaient tout le jeu.
+                if (!m_LoopWarned) {
+                    AddMessage("Boucle infinie dans le Blueprint de " + m_Objects[objIndex].name + " (ajoute un bloc Attendre)");
+                    m_LoopWarned = true;
+                }
+                return;
+            }
 
-            BlueprintNode node = m_Objects[objIndex].blueprint[i]; // copie : l'action peut modifier le vecteur
+            BlueprintNode node = m_Objects[objIndex].blueprint[cur]; // copie : l'action peut modifier le vecteur
             if (node.type < 0 || node.type >= NODE_TYPE_COUNT) return;
             int cat = NODE_TYPES[node.type].category;
 
-            if (cat == Cat_Event) return;               // debut d'une autre chaine
+            if (cat == Cat_Event) return;
             if (cat == Cat_Condition) {
                 m_CondObjectPos = m_Objects[objIndex].position;
                 m_CondObjectTouching = m_Objects[objIndex].touching;
-                if (!EvalCondition(node)) return;       // condition fausse : on arrete la
+                cur = EvalCondition(node) ? node.next : node.nextFalse;
                 continue;
             }
             if (node.type == N_ACT_WAIT) {
                 // Garde-fou : "Tick -> Attendre" empilerait une chaine par frame.
-                if ((int)m_Pending.size() < MAX_PENDING) {
-                    m_Pending.push_back({ objIndex, i + 1, node.a > 0.0f ? node.a : 1.0f });
+                if (node.next >= 0 && (int)m_Pending.size() < MAX_PENDING) {
+                    m_Pending.push_back({ objIndex, node.next, node.a > 0.0f ? node.a : 1.0f });
                 }
                 return;
             }
             if (!RunAction(objIndex, node)) return;
+            cur = node.next;
         }
     }
 
@@ -1660,6 +1829,7 @@ public:
     float PlayerHalfHeight() const { return PLAYER_HALF_HEIGHT_BASE * m_PlayerScale; }
     static constexpr int MAX_OBJECTS = 400;
     static constexpr int MAX_PENDING = 256;
+    static constexpr int MAX_CHAIN_STEPS = 1000;
 
     // Bloque le joueur devant les cotes des objets (au lieu de les
     // traverser) : ignore un objet si le joueur a deja les pieds au niveau
@@ -1888,42 +2058,56 @@ public:
 
     // ---- Gizmo de deplacement ----
 
+    // Le gizmo garde la meme taille a l'ecran quelle que soit la distance,
+    // comme dans Unreal (avant, il devenait minuscule de loin).
+    float GizmoScale(const WEngine::Vec3& pos) const {
+        WEngine::Vec3 d = pos - m_Camera.Position;
+        return std::max(0.15f, std::sqrt(WEngine::Vec3::Dot(d, d)) / 8.0f);
+    }
+
+    WEngine::Vec3 GizmoAxisColor(int axis) const {
+        // Axe survole ou tire en jaune, comme dans Unreal.
+        bool hot = (m_DraggingAxis == axis) || (m_DraggingAxis < 0 && m_HoverAxis == axis);
+        if (hot) return { 1.0f, 0.88f, 0.1f };
+        if (axis == 0) return { 0.95f, 0.25f, 0.25f };
+        if (axis == 1) return { 0.25f, 0.95f, 0.3f };
+        return { 0.3f, 0.45f, 0.95f };
+    }
+
     void DrawGizmo(const SceneObject& obj) {
         const WEngine::Vec3& pos = obj.position;
+        float s = GizmoScale(pos);
         m_Shader->SetInt(m_LocLit, 0);
         m_Shader->SetInt(m_LocUseTex, 0);
 
         if (m_GizmoMode == 1) {
-            // Rotation : trois anneaux, un par axe
-            DrawRotationRing(pos, 0, 0.95f, 0.25f, 0.25f);
-            DrawRotationRing(pos, 1, 0.25f, 0.95f, 0.3f);
-            DrawRotationRing(pos, 2, 0.3f, 0.45f, 0.95f);
+            for (int a = 0; a < 3; a++) DrawRotationRing(pos, a, s, GizmoAxisColor(a));
             return;
         }
-
         bool scaleMode = (m_GizmoMode == 2);
-        DrawAxisHandle(pos, AXIS_X, 0.95f, 0.25f, 0.25f, scaleMode);
-        DrawAxisHandle(pos, AXIS_Y, 0.25f, 0.95f, 0.3f, scaleMode);
-        DrawAxisHandle(pos, AXIS_Z, 0.3f, 0.45f, 0.95f, scaleMode);
+        DrawAxisHandle(pos, AXIS_X, s, GizmoAxisColor(0), scaleMode);
+        DrawAxisHandle(pos, AXIS_Y, s, GizmoAxisColor(1), scaleMode);
+        DrawAxisHandle(pos, AXIS_Z, s, GizmoAxisColor(2), scaleMode);
     }
 
-    void DrawRotationRing(const WEngine::Vec3& center, int axis, float r, float g, float b) {
+    void DrawRotationRing(const WEngine::Vec3& center, int axis, float s, const WEngine::Vec3& color) {
         // L'anneau est cree dans le plan XZ : on le bascule selon l'axe.
         WEngine::Mat4 orient = WEngine::Mat4::Identity();
         if (axis == 0) orient = WEngine::Mat4::RotateZ(90.0f * DEG2RAD); // autour de X
         else if (axis == 2) orient = WEngine::Mat4::RotateX(90.0f * DEG2RAD); // autour de Z
+        float r = GIZMO_LEN * s;
         WEngine::Mat4 model = WEngine::Mat4::Multiply(
             WEngine::Mat4::Multiply(WEngine::Mat4::Translate(center), orient),
-            WEngine::Mat4::Scale({ GIZMO_LEN, GIZMO_LEN, GIZMO_LEN }));
-        m_Shader->SetFloat3(m_LocTint, r, g, b);
+            WEngine::Mat4::Scale({ r, r, r }));
+        m_Shader->SetFloat3(m_LocTint, color.x, color.y, color.z);
         SetModel(model);
         m_Ring->Draw();
     }
 
-    void DrawAxisHandle(const WEngine::Vec3& origin, const WEngine::Vec3& axis, float r, float g, float b, bool boxTip) {
-        float shaftLen = GIZMO_LEN * 0.7f, thick = 0.06f;
-        float headLen = boxTip ? 0.22f : GIZMO_LEN * 0.3f;
-        float headThick = boxTip ? 0.22f : 0.16f;
+    void DrawAxisHandle(const WEngine::Vec3& origin, const WEngine::Vec3& axis, float s, const WEngine::Vec3& color, bool boxTip) {
+        float shaftLen = GIZMO_LEN * 0.7f * s, thick = 0.06f * s;
+        float headLen = (boxTip ? 0.22f : GIZMO_LEN * 0.3f) * s;
+        float headThick = (boxTip ? 0.22f : 0.16f) * s;
 
         WEngine::Vec3 shaftScale(
             axis.x != 0.0f ? shaftLen : thick,
@@ -1931,7 +2115,7 @@ public:
             axis.z != 0.0f ? shaftLen : thick);
         WEngine::Vec3 shaftPos = origin + axis * (shaftLen * 0.5f);
         WEngine::Mat4 shaftModel = WEngine::Mat4::Multiply(WEngine::Mat4::Translate(shaftPos), WEngine::Mat4::Scale(shaftScale));
-        m_Shader->SetFloat3(m_LocTint, r, g, b);
+        m_Shader->SetFloat3(m_LocTint, color.x, color.y, color.z);
         SetModel(shaftModel);
         m_Cube->Draw();
 
@@ -1945,141 +2129,388 @@ public:
         m_Cube->Draw();
     }
 
-    void UpdatePickingAndGizmo(bool uiHasMouse) {
-        auto& window = WEngine::Application::Get().GetWindow();
-        auto [mx, my] = WEngine::Input::GetMousePosition();
-        WEngine::Ray ray = m_Camera.ScreenPointToRay(mx, my, (float)window.GetWidth(), (float)window.GetHeight(), FOV_Y);
+    // Distance la plus courte entre le rayon de la souris et un segment.
+    static float RaySegmentDistance(const WEngine::Ray& ray, const WEngine::Vec3& a, const WEngine::Vec3& b) {
+        WEngine::Vec3 d1 = ray.direction, d2 = b - a, r = ray.origin - a;
+        float a11 = WEngine::Vec3::Dot(d1, d1), b12 = WEngine::Vec3::Dot(d1, d2), c22 = WEngine::Vec3::Dot(d2, d2);
+        float d = WEngine::Vec3::Dot(d1, r), e = WEngine::Vec3::Dot(d2, r);
+        if (a11 < 1e-8f || c22 < 1e-8f) return 1e9f;
+        float denom = a11 * c22 - b12 * b12;
+        float t = denom > 1e-8f ? (b12 * e - c22 * d) / denom : 0.0f;
+        if (t < 0.0f) t = 0.0f;
+        float u = (e + t * b12) / c22;
+        u = std::min(1.0f, std::max(0.0f, u));
+        t = (u * b12 - d) / a11;
+        if (t < 0.0f) t = 0.0f;
+        WEngine::Vec3 diff = (ray.origin + d1 * t) - (a + d2 * u);
+        return std::sqrt(WEngine::Vec3::Dot(diff, diff));
+    }
 
-        bool leftDown = !uiHasMouse && WEngine::Input::IsMouseButtonPressed(GLFW_MOUSE_BUTTON_LEFT);
-        bool justPressed = leftDown && !m_LeftWasDown;
-        m_LeftWasDown = leftDown;
-
-        if (m_DraggingAxis >= 0) {
-            if (!leftDown || m_Selected < 0 || m_Selected >= (int)m_Objects.size()) {
-                m_DraggingAxis = -1;
+    // Quel axe du gizmo est sous la souris ? (-1 = aucun). Toute la fleche
+    // est cliquable, pas seulement sa pointe.
+    int HitTestGizmo(const WEngine::Ray& ray) const {
+        if (m_GameView || m_Selected < 0 || m_Selected >= (int)m_Objects.size()) return -1;
+        const SceneObject& sel = m_Objects[m_Selected];
+        if (sel.shape == Shape_Text) return -1;
+        const WEngine::Vec3& objPos = sel.position;
+        float s = GizmoScale(objPos);
+        int bestAxis = -1;
+        float best = 1e9f;
+        for (int a = 0; a < 3; a++) {
+            WEngine::Vec3 dir = (a == 0) ? AXIS_X : (a == 1 ? AXIS_Y : AXIS_Z);
+            if (m_GizmoMode == 1) {
+                WEngine::Vec3 hit;
+                if (!WEngine::RayPlaneIntersect(ray, objPos, dir, hit)) continue;
+                WEngine::Vec3 d = hit - objPos;
+                float diff = std::fabs(std::sqrt(WEngine::Vec3::Dot(d, d)) - GIZMO_LEN * s);
+                if (diff < 0.2f * s && diff < best) { best = diff; bestAxis = a; }
             } else {
-                SceneObject& sel = m_Objects[m_Selected];
-                WEngine::Vec3 axis = m_DraggingAxis == 0 ? AXIS_X : (m_DraggingAxis == 1 ? AXIS_Y : AXIS_Z);
-
-                if (m_GizmoMode == 1) {
-                    // Rotation : le deplacement horizontal de la souris tourne l'objet
-                    float delta = (mx - m_DragStartMouseX) * 0.5f;
-                    if (m_Snap && m_SnapRot > 0.0f) delta = std::round(delta / m_SnapRot) * m_SnapRot;
-                    WEngine::Vec3 rot = m_DragStartRot;
-                    if (m_DraggingAxis == 0) rot.x += delta;
-                    else if (m_DraggingAxis == 1) rot.y += delta;
-                    else rot.z += delta;
-                    sel.rotationEuler = rot;
-                } else if (m_GizmoMode == 2) {
-                    // Echelle : projection sur l'axe comme pour le deplacement
-                    WEngine::Vec3 camFwd = m_Camera.Forward();
-                    WEngine::Vec3 planeNormal = WEngine::Vec3::Cross(axis, WEngine::Vec3::Cross(camFwd, axis)).Normalized();
-                    WEngine::Vec3 hit;
-                    if (WEngine::RayPlaneIntersect(ray, m_DragOriginPos, planeNormal, hit)) {
-                        float t = WEngine::Vec3::Dot(hit - m_DragOriginPos, axis) - m_DragStartOffset;
-                        WEngine::Vec3 sc = m_DragStartScale;
-                        float& target = (m_DraggingAxis == 0) ? sc.x : (m_DraggingAxis == 1 ? sc.y : sc.z);
-                        target += t;
-                        if (m_Snap && m_SnapScale > 0.0f) target = std::round(target / m_SnapScale) * m_SnapScale;
-                        if (target < 0.05f) target = 0.05f;
-                        sel.scale = sc;
-                    }
-                } else {
-                    WEngine::Vec3 camFwd = m_Camera.Forward();
-                    WEngine::Vec3 planeNormal = WEngine::Vec3::Cross(axis, WEngine::Vec3::Cross(camFwd, axis)).Normalized();
-                    WEngine::Vec3 hit;
-                    if (WEngine::RayPlaneIntersect(ray, m_DragOriginPos, planeNormal, hit)) {
-                        float t = WEngine::Vec3::Dot(hit - m_DragOriginPos, axis);
-                        WEngine::Vec3 p = m_DragOriginPos + axis * (t - m_DragStartOffset);
-                        if (m_Snap && m_SnapMove > 0.0f) {
-                            p.x = std::round(p.x / m_SnapMove) * m_SnapMove;
-                            p.y = std::round(p.y / m_SnapMove) * m_SnapMove;
-                            p.z = std::round(p.z / m_SnapMove) * m_SnapMove;
-                        }
-                        sel.position = p;
-                    }
-                }
+                float dist = RaySegmentDistance(ray, objPos + dir * (0.15f * s), objPos + dir * (GIZMO_LEN * s));
+                if (dist < 0.16f * s && dist < best) { best = dist; bestAxis = a; }
             }
+        }
+        return bestAxis;
+    }
+
+    bool TryStartGizmoDrag(const WEngine::Ray& ray, float mx, bool duplicate) {
+        int axisHit = HitTestGizmo(ray);
+        if (axisHit < 0) return false;
+        PushUndo();
+        if (duplicate) {
+            // Alt + glisser une fleche : on deplace une copie, comme dans Unreal.
+            SceneObject copy = m_Objects[m_Selected];
+            copy.name = MakeUniqueName(copy.name);
+            m_Objects.push_back(copy);
+            m_Selected = (int)m_Objects.size() - 1;
+            SetStatus("Copie : " + copy.name);
+        }
+        const SceneObject& sel = m_Objects[m_Selected];
+        m_DraggingAxis = axisHit;
+        m_DragOriginPos = sel.position;
+        m_DragStartScale = sel.scale;
+        m_DragStartRot = sel.rotationEuler;
+        m_DragStartMouseX = mx;
+        WEngine::Vec3 axis = axisHit == 0 ? AXIS_X : (axisHit == 1 ? AXIS_Y : AXIS_Z);
+        WEngine::Vec3 camFwd = m_Camera.Forward();
+        WEngine::Vec3 planeNormal = WEngine::Vec3::Cross(axis, WEngine::Vec3::Cross(camFwd, axis)).Normalized();
+        WEngine::Vec3 hit;
+        m_DragStartOffset = 0.0f;
+        if (WEngine::RayPlaneIntersect(ray, m_DragOriginPos, planeNormal, hit)) {
+            m_DragStartOffset = WEngine::Vec3::Dot(hit - m_DragOriginPos, axis);
+        }
+        return true;
+    }
+
+    void UpdateGizmoDrag(const WEngine::Ray& ray, float mx) {
+        SceneObject& sel = m_Objects[m_Selected];
+        WEngine::Vec3 axis = m_DraggingAxis == 0 ? AXIS_X : (m_DraggingAxis == 1 ? AXIS_Y : AXIS_Z);
+
+        if (m_GizmoMode == 1) {
+            // Rotation : le deplacement horizontal de la souris tourne l'objet
+            float delta = (mx - m_DragStartMouseX) * 0.5f;
+            if (m_Snap && m_SnapRot > 0.0f) delta = std::round(delta / m_SnapRot) * m_SnapRot;
+            WEngine::Vec3 rot = m_DragStartRot;
+            if (m_DraggingAxis == 0) rot.x += delta;
+            else if (m_DraggingAxis == 1) rot.y += delta;
+            else rot.z += delta;
+            sel.rotationEuler = rot;
             return;
         }
 
-        if (!justPressed) return;
+        WEngine::Vec3 camFwd = m_Camera.Forward();
+        WEngine::Vec3 planeNormal = WEngine::Vec3::Cross(axis, WEngine::Vec3::Cross(camFwd, axis)).Normalized();
+        WEngine::Vec3 hit;
+        if (!WEngine::RayPlaneIntersect(ray, m_DragOriginPos, planeNormal, hit)) return;
 
-        if (m_Selected >= 0 && m_Selected < (int)m_Objects.size()) {
-            const SceneObject& sel = m_Objects[m_Selected];
-            const WEngine::Vec3& objPos = sel.position;
-            int bestAxis = -1;
+        if (m_GizmoMode == 2) {
+            float t = WEngine::Vec3::Dot(hit - m_DragOriginPos, axis) - m_DragStartOffset;
+            WEngine::Vec3 sc = m_DragStartScale;
+            float& target = (m_DraggingAxis == 0) ? sc.x : (m_DraggingAxis == 1 ? sc.y : sc.z);
+            target += t;
+            if (m_Snap && m_SnapScale > 0.0f) target = std::round(target / m_SnapScale) * m_SnapScale;
+            if (target < 0.05f) target = 0.05f;
+            sel.scale = sc;
+        } else {
+            float t = WEngine::Vec3::Dot(hit - m_DragOriginPos, axis);
+            WEngine::Vec3 p = m_DragOriginPos + axis * (t - m_DragStartOffset);
+            if (m_Snap && m_SnapMove > 0.0f) {
+                // Seul l'axe tire est aligne sur la grille : les deux autres
+                // gardent leur valeur (avant, ils sautaient aussi sur la grille).
+                float& v = (m_DraggingAxis == 0) ? p.x : (m_DraggingAxis == 1 ? p.y : p.z);
+                v = std::round(v / m_SnapMove) * m_SnapMove;
+            }
+            sel.position = p;
+        }
+    }
 
-            if (m_GizmoMode == 1) {
-                // Anneaux : on croise le rayon avec le plan de chaque anneau
-                // et on regarde si le point tombe pres du cercle.
-                float bestDist = 1e9f;
-                for (int a = 0; a < 3; a++) {
-                    WEngine::Vec3 normal = (a == 0) ? AXIS_X : (a == 1 ? AXIS_Y : AXIS_Z);
-                    WEngine::Vec3 hit;
-                    if (!WEngine::RayPlaneIntersect(ray, objPos, normal, hit)) continue;
-                    WEngine::Vec3 d = hit - objPos;
-                    float radius = std::sqrt(WEngine::Vec3::Dot(d, d));
-                    float diff = std::fabs(radius - GIZMO_LEN);
-                    if (diff < 0.25f && diff < bestDist) { bestDist = diff; bestAxis = a; }
+    // Selection precise : on teste la vraie boite (ou sphere) de l'objet,
+    // tournee et mise a l'echelle, au lieu d'une grosse sphere approximative
+    // qui faisait selectionner le mauvais objet.
+    bool RayHitsObject(const WEngine::Ray& ray, const SceneObject& o, float& outT) const {
+        switch (o.shape) {
+            case Shape_Text:        return false;
+            case Shape_Camera:      return WEngine::RaySphereIntersect(ray, o.position, 0.45f, outT);
+            case Shape_Light:       return WEngine::RaySphereIntersect(ray, o.position, 0.4f, outT);
+            case Shape_PlayerStart: return WEngine::RaySphereIntersect(ray, o.position + WEngine::Vec3(0.0f, 0.9f, 0.0f), 0.7f, outT);
+            case Shape_Checkpoint:  return WEngine::RaySphereIntersect(ray, o.position + WEngine::Vec3(0.0f, 1.0f, 0.0f), 0.75f, outT);
+            default: break;
+        }
+        WEngine::Mat4 rot = WEngine::Mat4::Multiply(
+            WEngine::Mat4::RotateY(m_Time * o.rotationSpeed + o.rotationEuler.y * DEG2RAD),
+            WEngine::Mat4::Multiply(
+                WEngine::Mat4::RotateX(o.rotationEuler.x * DEG2RAD),
+                WEngine::Mat4::RotateZ(o.rotationEuler.z * DEG2RAD)));
+        const float* m = rot.m;
+        auto toLocal = [&](const WEngine::Vec3& v) {
+            return WEngine::Vec3(m[0] * v.x + m[1] * v.y + m[2] * v.z,
+                                 m[4] * v.x + m[5] * v.y + m[6] * v.z,
+                                 m[8] * v.x + m[9] * v.y + m[10] * v.z);
+        };
+        WEngine::Vec3 lo = toLocal(ray.origin - o.position), ld = toLocal(ray.direction);
+        float sc[3] = { std::max(std::fabs(o.scale.x), 1e-4f), std::max(std::fabs(o.scale.y), 1e-4f), std::max(std::fabs(o.scale.z), 1e-4f) };
+        float po[3] = { lo.x / sc[0], lo.y / sc[1], lo.z / sc[2] };
+        float pd[3] = { ld.x / sc[0], ld.y / sc[1], ld.z / sc[2] };
+
+        if (o.shape == Shape_Sphere) {
+            float a = pd[0] * pd[0] + pd[1] * pd[1] + pd[2] * pd[2];
+            float b = 2.0f * (po[0] * pd[0] + po[1] * pd[1] + po[2] * pd[2]);
+            float c = po[0] * po[0] + po[1] * po[1] + po[2] * po[2] - 0.25f;
+            float disc = b * b - 4.0f * a * c;
+            if (a < 1e-12f || disc < 0.0f) return false;
+            float sq = std::sqrt(disc);
+            float t = (-b - sq) / (2.0f * a);
+            if (t < 0.0f) t = (-b + sq) / (2.0f * a);
+            if (t < 0.0f) return false;
+            outT = t;
+            return true;
+        }
+
+        float tMin = -1e30f, tMax = 1e30f;
+        for (int k = 0; k < 3; k++) {
+            if (std::fabs(pd[k]) < 1e-9f) {
+                if (po[k] < -0.5f || po[k] > 0.5f) return false;
+                continue;
+            }
+            float t1 = (-0.5f - po[k]) / pd[k], t2 = (0.5f - po[k]) / pd[k];
+            if (t1 > t2) std::swap(t1, t2);
+            tMin = std::max(tMin, t1);
+            tMax = std::min(tMax, t2);
+            if (tMin > tMax) return false;
+        }
+        if (tMax < 0.0f) return false;
+        outT = tMin >= 0.0f ? tMin : tMax;
+        return true;
+    }
+
+    int PickObject(const WEngine::Ray& ray) const {
+        float bestT = 1e30f;
+        int bestObj = -1;
+        for (int i = 0; i < (int)m_Objects.size(); i++) {
+            if (m_Objects[i].destroyed) continue;
+            if (m_GameView && (m_Objects[i].shape == Shape_Camera || m_Objects[i].shape == Shape_Light || m_Objects[i].shape == Shape_PlayerStart)) continue;
+            float t;
+            if (RayHitsObject(ray, m_Objects[i], t) && t < bestT) { bestT = t; bestObj = i; }
+        }
+        return bestObj;
+    }
+
+    static bool AltDown() {
+        return WEngine::Input::IsKeyPressed(GLFW_KEY_LEFT_ALT) || WEngine::Input::IsKeyPressed(GLFW_KEY_RIGHT_ALT);
+    }
+
+    // Point autour duquel on tourne avec Alt + clic gauche : l'objet
+    // selectionne, sinon un point devant la camera.
+    WEngine::Vec3 OrbitPivot() const {
+        if (m_Selected >= 0 && m_Selected < (int)m_Objects.size()) return m_Objects[m_Selected].position;
+        return m_Camera.Position + m_Camera.Forward() * 8.0f;
+    }
+
+    // Navigation du viewport calquee sur Unreal (vue perspective) :
+    //  - clic droit + souris : regarder, + ZQSD/WASD/Q/E : voler
+    //  - clic gauche + glisser dans le vide : avancer/reculer + tourner
+    //  - clic gauche + clic droit + glisser : monter/descendre
+    //  - clic molette + glisser : deplacer la vue (panoramique)
+    //  - Alt + clic gauche : orbiter autour de la selection
+    //  - Alt + clic droit : zoomer vers la selection ; Alt + molette : panoramique
+    //  - clic gauche sans bouger : selectionner (au relachement)
+    void UpdateViewportInput(WEngine::Timestep ts, bool uiHasMouse) {
+        auto& window = WEngine::Application::Get().GetWindow();
+        auto [mx, my] = WEngine::Input::GetMousePosition();
+        (void)window;
+        WEngine::Ray ray = m_Camera.ScreenPointToRay(mx - m_ViewX, my - m_ViewY, m_ViewportW, m_ViewportH, FOV_Y);
+
+        bool lmb = WEngine::Input::IsMouseButtonPressed(GLFW_MOUSE_BUTTON_LEFT);
+        bool rmb = WEngine::Input::IsMouseButtonPressed(GLFW_MOUSE_BUTTON_RIGHT);
+        bool mmb = WEngine::Input::IsMouseButtonPressed(GLFW_MOUSE_BUTTON_MIDDLE);
+        bool lmbPressed = lmb && !m_LeftWasDown, rmbPressed = rmb && !m_RightWasDown, mmbPressed = mmb && !m_MiddleWasDown;
+        m_LeftWasDown = lmb; m_RightWasDown = rmb; m_MiddleWasDown = mmb;
+        float dx = mx - m_NavLastX, dy = my - m_NavLastY;
+        m_NavLastX = mx; m_NavLastY = my;
+        bool alt = AltDown();
+
+        if (m_DraggingAxis >= 0) {
+            if (!lmb || m_Selected < 0 || m_Selected >= (int)m_Objects.size()) m_DraggingAxis = -1;
+            else UpdateGizmoDrag(ray, mx);
+            m_Camera.ResetLook();
+            return;
+        }
+
+        if (m_NavMode == Nav_None && !uiHasMouse) {
+            if (lmbPressed) {
+                if (TryStartGizmoDrag(ray, mx, alt)) { m_HoverAxis = -1; return; }
+                if (alt) {
+                    WEngine::Vec3 d = OrbitPivot() - m_Camera.Position;
+                    m_OrbitDist = std::max(0.5f, std::sqrt(WEngine::Vec3::Dot(d, d)));
+                    m_NavMode = Nav_Orbit;
+                } else {
+                    m_NavMode = Nav_LmbPending;
+                    m_NavPressX = mx; m_NavPressY = my;
                 }
-            } else {
-                float bestT = 1e9f;
-                struct { int axis; WEngine::Vec3 dir; } handles[3] = { {0, AXIS_X}, {1, AXIS_Y}, {2, AXIS_Z} };
-                for (auto& h : handles) {
-                    WEngine::Vec3 handleCenter = objPos + h.dir * (GIZMO_LEN * 0.75f);
-                    float t;
-                    if (WEngine::RaySphereIntersect(ray, handleCenter, GIZMO_HANDLE_RADIUS, t) && t < bestT) {
-                        bestT = t; bestAxis = h.axis;
+            } else if (mmbPressed) {
+                m_NavMode = Nav_Pan;
+            } else if (rmbPressed && alt) {
+                m_NavMode = Nav_Dolly;
+            }
+        }
+
+        const float LOOK = m_Camera.MouseSensitivity;
+        const float PAN = 0.01f * std::max(1.0f, m_Camera.MoveSpeed / 6.0f);
+        WEngine::Vec3 flatFwd = m_Camera.Forward();
+        flatFwd.y = 0.0f;
+        if (WEngine::Vec3::Dot(flatFwd, flatFwd) > 1e-6f) flatFwd = flatFwd.Normalized();
+
+        switch (m_NavMode) {
+            case Nav_LmbPending:
+            case Nav_LmbFly:
+                if (!lmb) {
+                    if (m_NavMode == Nav_LmbPending) m_Selected = PickObject(ray);
+                    m_NavMode = Nav_None;
+                    break;
+                }
+                if (m_NavMode == Nav_LmbPending && std::fabs(mx - m_NavPressX) + std::fabs(my - m_NavPressY) > 4.0f) {
+                    m_NavMode = Nav_LmbFly;
+                }
+                if (m_NavMode == Nav_LmbFly) {
+                    if (rmb) {
+                        m_Camera.Position.y -= dy * PAN * 2.0f;
+                    } else {
+                        m_Camera.Yaw += dx * LOOK;
+                        m_Camera.Position = m_Camera.Position - flatFwd * (dy * PAN * 3.0f);
                     }
                 }
-            }
-
-            if (bestAxis >= 0) {
-                PushUndo();
-                m_DraggingAxis = bestAxis;
-                m_DragOriginPos = objPos;
-                m_DragStartScale = sel.scale;
-                m_DragStartRot = sel.rotationEuler;
-                m_DragStartMouseX = mx;
-                WEngine::Vec3 axis = bestAxis == 0 ? AXIS_X : (bestAxis == 1 ? AXIS_Y : AXIS_Z);
-                WEngine::Vec3 camFwd = m_Camera.Forward();
-                WEngine::Vec3 planeNormal = WEngine::Vec3::Cross(axis, WEngine::Vec3::Cross(camFwd, axis)).Normalized();
-                WEngine::Vec3 hit;
-                m_DragStartOffset = 0.0f;
-                if (WEngine::RayPlaneIntersect(ray, m_DragOriginPos, planeNormal, hit)) {
-                    m_DragStartOffset = WEngine::Vec3::Dot(hit - m_DragOriginPos, axis);
+                break;
+            case Nav_Orbit:
+                if (!lmb) { m_NavMode = Nav_None; break; }
+                if (dx != 0.0f || dy != 0.0f) {
+                    WEngine::Vec3 pivot = OrbitPivot();
+                    m_Camera.Yaw += dx * LOOK * 1.5f;
+                    m_Camera.Pitch -= dy * LOOK * 1.5f;
+                    if (m_Camera.Pitch > 89.0f) m_Camera.Pitch = 89.0f;
+                    if (m_Camera.Pitch < -89.0f) m_Camera.Pitch = -89.0f;
+                    m_Camera.Position = pivot - m_Camera.Forward() * m_OrbitDist;
                 }
-                return;
-            }
+                break;
+            case Nav_Pan:
+                if (!mmb) { m_NavMode = Nav_None; break; }
+                m_Camera.Position = m_Camera.Position + m_Camera.Right() * (dx * PAN * 2.0f) - m_Camera.Up() * (dy * PAN * 2.0f);
+                break;
+            case Nav_Dolly:
+                if (!rmb) { m_NavMode = Nav_None; break; }
+                m_Camera.Position = m_Camera.Position + m_Camera.Forward() * ((dx - dy) * PAN * 2.0f);
+                break;
+            case Nav_None:
+            default:
+                if (!uiHasMouse && !alt) m_Camera.OnUpdate(ts);
+                break;
         }
+        if (m_NavMode != Nav_None) m_Camera.ResetLook();
 
-        float bestT = 1e9f; int bestObj = -1;
-        for (int i = 0; i < (int)m_Objects.size(); i++) {
-            if (m_Objects[i].destroyed || m_Objects[i].shape == Shape_Text) continue;
-            float t;
-            if (WEngine::RaySphereIntersect(ray, m_Objects[i].position, m_Objects[i].pickRadius, t) && t < bestT) {
-                bestT = t; bestObj = i;
-            }
+        m_HoverAxis = (m_NavMode == Nav_None && !uiHasMouse && !rmb) ? HitTestGizmo(ray) : -1;
+    }
+
+    // Molette : avancer/reculer ; molette + clic droit : vitesse de la camera
+    // (les deux comme dans Unreal).
+    void HandleViewportWheel() {
+        if (m_PlayerMode) return;
+        ImGuiIO& io = ImGui::GetIO();
+        if (io.MouseWheel == 0.0f || io.WantCaptureMouse) return;
+        if (WEngine::Input::IsMouseButtonPressed(GLFW_MOUSE_BUTTON_RIGHT)) {
+            float f = std::pow(1.25f, io.MouseWheel);
+            m_Camera.MoveSpeed = std::min(60.0f, std::max(0.5f, m_Camera.MoveSpeed * f));
+            char buf[64];
+            snprintf(buf, sizeof(buf), "Vitesse de la camera : %.1f", m_Camera.MoveSpeed);
+            SetStatus(buf);
+        } else {
+            float step = std::max(0.5f, m_Camera.MoveSpeed * 0.15f);
+            m_Camera.Position = m_Camera.Position + m_Camera.Forward() * (io.MouseWheel * step);
         }
-        m_Selected = bestObj;
+    }
+
+    // Touche Fin : pose l'objet sur la surface juste en dessous (ou sur la
+    // grille s'il n'y a rien), comme "Snap to Floor" dans Unreal.
+    void SnapSelectedToFloor() {
+        if (m_Selected < 0 || m_Selected >= (int)m_Objects.size()) return;
+        SceneObject& o = m_Objects[m_Selected];
+        bool solid = (o.shape == Shape_Cube || o.shape == Shape_Sphere || o.shape == Shape_Cylinder || o.shape == Shape_Model);
+        float halfH = solid ? std::fabs(o.scale.y) * 0.5f : 0.0f;
+        float bottom = o.position.y - halfH;
+        float halfX = solid ? std::fabs(o.scale.x) * 0.5f : 0.05f;
+        float halfZ = solid ? std::fabs(o.scale.z) * 0.5f : 0.05f;
+        float floorY = 0.0f;
+        bool found = false;
+        for (int i = 0; i < (int)m_Objects.size(); i++) {
+            if (i == m_Selected) continue;
+            const SceneObject& other = m_Objects[i];
+            bool otherSolid = (other.shape == Shape_Cube || other.shape == Shape_Sphere || other.shape == Shape_Cylinder || other.shape == Shape_Model);
+            if (!otherSolid || other.destroyed) continue;
+            float ohx = std::fabs(other.scale.x) * 0.5f, ohz = std::fabs(other.scale.z) * 0.5f;
+            if (o.position.x + halfX <= other.position.x - ohx || o.position.x - halfX >= other.position.x + ohx) continue;
+            if (o.position.z + halfZ <= other.position.z - ohz || o.position.z - halfZ >= other.position.z + ohz) continue;
+            float top = other.position.y + std::fabs(other.scale.y) * 0.5f;
+            if (top <= bottom + 0.001f && (!found || top > floorY)) { floorY = top; found = true; }
+        }
+        if (!found && bottom < 0.0f) { SetStatus("Rien en dessous"); return; }
+        PushUndo();
+        o.position.y = floorY + halfH;
+        SetStatus("Pose au sol");
     }
 
     // ================= Interface ======================================
 
     void OnImGuiRender() override {
+        if (m_ClearUiFocus) {
+            // En jeu, le clavier va au jeu : sinon Espace (sauter) "cliquait"
+            // aussi le dernier bouton de l'interface, par ex. Arreter.
+            ImGui::SetWindowFocus(nullptr);
+            m_ClearUiFocus = false;
+        }
+        HandleViewportWheel();
+
         DrawToolbar();
         DrawOutliner();
         DrawDetails();
         DrawContentBrowser();
         DrawWorldSettings();
 
+        m_BpWindowFocused = false;
         if (m_ShowScriptEditor && m_ScriptTarget >= 0 && m_ScriptTarget < (int)m_Objects.size()) {
             DrawBlueprintEditor(m_Objects[m_ScriptTarget]);
         }
 
         DrawStatsPanel();
         DrawWorldOverlay();
+
+        // Historique : une entree par geste termine (voir PushUndo).
+        bool mouseDown = WEngine::Input::IsMouseButtonPressed(GLFW_MOUSE_BUTTON_LEFT)
+                      || WEngine::Input::IsMouseButtonPressed(GLFW_MOUSE_BUTTON_RIGHT)
+                      || WEngine::Input::IsMouseButtonPressed(GLFW_MOUSE_BUTTON_MIDDLE);
+        bool interacting = ImGui::IsAnyItemActive() || mouseDown || m_DraggingAxis >= 0;
+        if (m_WasInteracting && !interacting) m_UndoCheckNeeded = true;
+        m_WasInteracting = interacting;
+        if (!interacting && m_UndoCheckNeeded && !m_PlayerMode) {
+            CommitUndoIfChanged();
+            m_UndoCheckNeeded = false;
+        }
     }
 
     // Barre d'outils en haut, comme dans Unreal : le bouton Jouer y vit.
@@ -2089,7 +2520,7 @@ public:
         ImGui::PushStyleColor(ImGuiCol_Button, col);
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(col.x * 1.25f, col.y * 1.25f, col.z * 1.25f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, col);
-        if (ImGui::Button(m_PlayerMode ? "Arreter  (F5)" : "Jouer  (F5)", ImVec2(130, 28))) TogglePlay();
+        if (ImGui::Button(m_PlayerMode ? "Arreter (Echap)" : "Jouer (Alt+P)", ImVec2(130, 28))) TogglePlay();
         ImGui::PopStyleColor(3);
 
         ImGui::SameLine();
@@ -2140,7 +2571,7 @@ public:
         } else if (m_StatusTimer > 0.0f) {
             ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "%s", m_StatusMessage.c_str());
         } else {
-            ImGui::TextDisabled("Ctrl+Z annuler, Ctrl+D dupliquer, F cadrer, clic droit + WASD naviguer");
+            ImGui::TextDisabled("Ctrl+Z annuler, Alt+P jouer, F cadrer, Alt+clic orbite, clic droit + WASD voler");
         }
         ImGui::End();
     }
@@ -2166,7 +2597,11 @@ public:
             if (m_Objects[i].destroyed) label += "  (detruit)";
             if (!m_Objects[i].blueprint.empty()) label += "   [BP]";
             ImGui::PushID(i);
-            if (ImGui::Selectable(label.c_str(), selected)) m_Selected = i;
+            if (ImGui::Selectable(label.c_str(), selected, ImGuiSelectableFlags_AllowDoubleClick)) {
+                m_Selected = i;
+                // Double-clic : la vue se centre sur l'objet, comme dans Unreal.
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && !m_PlayerMode) FocusSelected();
+            }
             ImGui::PopID();
         }
         ImGui::Separator();
@@ -2458,25 +2893,36 @@ public:
         ImGui::Text("Objets : %d", (int)m_Objects.size());
         ImGui::Text("Camera : %.1f, %.1f, %.1f", m_Camera.Position.x, m_Camera.Position.y, m_Camera.Position.z);
         ImGui::Separator();
-        ImGui::TextWrapped("Clic gauche sur un objet : le selectionner");
-        ImGui::TextWrapped("Clic gauche + tirer une fleche du gizmo : le deplacer sur cet axe");
-        ImGui::TextWrapped("Suppr : supprimer l'objet selectionne");
-        ImGui::TextWrapped("N : ouvrir son Blueprint");
-        ImGui::TextWrapped("F5 : lancer / arreter le jeu");
-        ImGui::TextWrapped("Clic droit + souris : regarder, WASD : se deplacer, Q/E : monter/descendre, Shift : plus vite");
+        ImGui::TextDisabled("Commandes (les memes que dans Unreal) :");
+        ImGui::TextWrapped("Clic gauche : selectionner  |  Clic gauche + glisser dans le vide : avancer/tourner");
+        ImGui::TextWrapped("Clic droit + souris : regarder  |  + WASD/ZQSD : voler, Q/E : descendre/monter, molette : vitesse");
+        ImGui::TextWrapped("Molette : avancer/reculer  |  Clic molette + glisser : deplacer la vue");
+        ImGui::TextWrapped("Alt + clic gauche : tourner autour de la selection  |  Alt + clic droit : zoom");
+        ImGui::TextWrapped("W / E / R ou Espace : Deplacer / Tourner / Redimensionner  |  Alt + glisser une fleche : copier");
+        ImGui::TextWrapped("F : cadrer la selection  |  Fin : poser au sol  |  G : vue jeu  |  Suppr : supprimer");
+        ImGui::TextWrapped("Ctrl+Z / Ctrl+Y : annuler / retablir (tout, y compris Details et Blueprint)");
+        ImGui::TextWrapped("N : ouvrir le Blueprint  |  Alt+P ou F5 : jouer  |  Echap : arreter le jeu");
         ImGui::End();
     }
 
     // Labels "Texte" du monde 3D + HUD du jeu, dessines par-dessus tout.
     void DrawWorldOverlay() {
-        ImDrawList* fg = ImGui::GetForegroundDrawList();
+        // Dessine dans le viewport seulement (derriere les panneaux) : avant,
+        // les textes 3D et le HUD passaient par-dessus les fenetres.
+        ImDrawList* fg = ImGui::GetBackgroundDrawList();
+        fg->PushClipRect(ImVec2(m_ViewX, m_ViewY), ImVec2(m_ViewX + m_ViewportW, m_ViewY + m_ViewportH), true);
+        DrawWorldOverlayContent(fg);
+        fg->PopClipRect();
+    }
+
+    void DrawWorldOverlayContent(ImDrawList* fg) {
 
         if (m_NoViewInPlay) {
             const char* msg1 = "Aucune vue de jeu";
             const char* msg2 = "Ajoute un \"Depart Joueur\" (personnage) ou active une Camera";
             const char* msg3 = "avec un bloc Blueprint \"Activer cette camera\" pour lancer le jeu.";
             ImVec2 s1 = ImGui::CalcTextSize(msg1), s2 = ImGui::CalcTextSize(msg2), s3 = ImGui::CalcTextSize(msg3);
-            float cx = m_ViewportW * 0.5f, cy = m_ViewportH * 0.5f;
+            float cx = m_ViewX + m_ViewportW * 0.5f, cy = m_ViewY + m_ViewportH * 0.5f;
             fg->AddText(nullptr, 30.0f, ImVec2(cx - s1.x * 0.5f, cy - 40.0f), IM_COL32(255, 90, 90, 255), msg1);
             fg->AddText(nullptr, 18.0f, ImVec2(cx - s2.x * 0.5f, cy + 4.0f), IM_COL32(220, 220, 220, 255), msg2);
             fg->AddText(nullptr, 18.0f, ImVec2(cx - s3.x * 0.5f, cy + 26.0f), IM_COL32(220, 220, 220, 255), msg3);
@@ -2498,7 +2944,7 @@ public:
         if (!m_PlayerMode) return;
 
         // HUD : vies + messages des blueprints
-        float x = m_ViewportW * 0.5f - 60.0f, y = 24.0f;
+        float x = m_ViewX + m_ViewportW * 0.5f - 60.0f, y = m_ViewY + 14.0f;
         char lifeBuf[64];
         snprintf(lifeBuf, sizeof(lifeBuf), "Vie : %d", m_Play.life);
         fg->AddText(nullptr, 30.0f, ImVec2(x + 2, y + 2), IM_COL32(0, 0, 0, 200), lifeBuf);
@@ -2514,16 +2960,19 @@ public:
         if (m_Play.won) {
             const char* wonText = "NIVEAU TERMINE !";
             ImVec2 sz = ImGui::CalcTextSize(wonText);
-            float wx = m_ViewportW * 0.5f - sz.x * 1.2f;
-            fg->AddText(nullptr, 44.0f, ImVec2(wx + 2, m_ViewportH * 0.35f + 2), IM_COL32(0, 0, 0, 220), wonText);
-            fg->AddText(nullptr, 44.0f, ImVec2(wx, m_ViewportH * 0.35f), IM_COL32(120, 255, 140, 255), wonText);
+            float wx = m_ViewX + m_ViewportW * 0.5f - sz.x * 1.2f;
+            float wy = m_ViewY + m_ViewportH * 0.35f;
+            fg->AddText(nullptr, 44.0f, ImVec2(wx + 2, wy + 2), IM_COL32(0, 0, 0, 220), wonText);
+            fg->AddText(nullptr, 44.0f, ImVec2(wx, wy), IM_COL32(120, 255, 140, 255), wonText);
         }
 
-        float my = y + 66.0f;
+        // Messages en haut a gauche du viewport, comme le "Print String"
+        // d'Unreal (au centre, ils se melangeaient aux textes 3D).
+        float mx = m_ViewX + 12.0f, my = m_ViewY + 10.0f;
         for (auto& msg : m_Play.messages) {
             int alpha = (int)(255.0f * Clamp01(msg.timeLeft / 1.5f));
-            fg->AddText(nullptr, 20.0f, ImVec2(x + 1, my + 1), IM_COL32(0, 0, 0, alpha), msg.text.c_str());
-            fg->AddText(nullptr, 20.0f, ImVec2(x, my), IM_COL32(255, 255, 255, alpha), msg.text.c_str());
+            fg->AddText(nullptr, 20.0f, ImVec2(mx + 1, my + 1), IM_COL32(0, 0, 0, alpha), msg.text.c_str());
+            fg->AddText(nullptr, 20.0f, ImVec2(mx, my), IM_COL32(120, 220, 255, alpha), msg.text.c_str());
             my += 24.0f;
         }
     }
@@ -2534,14 +2983,22 @@ public:
         constexpr int KEY_ESCAPE = 256;
         constexpr int KEY_DELETE = 261;
         constexpr int KEY_N = 78;
+        constexpr int KEY_P = 80;
         constexpr int KEY_F5 = 294;
         bool typing = ImGui::GetIO().WantTextInput;
+        m_UndoCheckNeeded = true;
 
+        // Echap arrete le jeu (comme le PIE d'Unreal) ou deselectionne. Avant,
+        // Echap FERMAIT l'editeur sans rien demander : tout le travail non
+        // sauvegarde etait perdu.
         if (e.GetKeyCode() == KEY_ESCAPE) {
-            WEngine::Application::Get().Close();
+            if (typing || e.IsRepeat()) return;
+            if (m_PlayerMode) { StopPlay(); return; }
+            m_Selected = -1;
             return;
         }
-        if (e.GetKeyCode() == KEY_F5 && !e.IsRepeat()) {
+        bool altKey = AltDown();
+        if ((e.GetKeyCode() == KEY_F5 || (altKey && e.GetKeyCode() == KEY_P)) && !e.IsRepeat()) {
             TogglePlay();
             return;
         }
@@ -2577,13 +3034,41 @@ public:
             }
         }
 
+        if (ctrl) return;
+
+        // Dans l'editeur de Blueprint, Suppr efface le bloc selectionne.
+        if (key == KEY_DELETE && m_BpWindowFocused && m_ShowScriptEditor
+            && m_ScriptTarget >= 0 && m_ScriptTarget < (int)m_Objects.size()) {
+            auto& bp = m_Objects[m_ScriptTarget].blueprint;
+            if (m_SelectedNode >= 0 && m_SelectedNode < (int)bp.size()) {
+                RemoveNode(bp, m_SelectedNode);
+                m_SelectedNode = -1;
+            }
+            return;
+        }
+
         // W/E/R changent d'outil (la navigation WASD demande le clic droit).
-        if (!WEngine::Input::IsMouseButtonPressed(GLFW_MOUSE_BUTTON_RIGHT)) {
+        constexpr int KEY_G = 71, KEY_END = 269, KEY_SPACE = 32;
+        bool rmbHeld = WEngine::Input::IsMouseButtonPressed(GLFW_MOUSE_BUTTON_RIGHT);
+        if (!rmbHeld) {
             if (key == KEY_W) { m_GizmoMode = 0; SetStatus("Outil : Deplacer"); return; }
             if (key == KEY_E) { m_GizmoMode = 1; SetStatus("Outil : Tourner"); return; }
             if (key == KEY_R) { m_GizmoMode = 2; SetStatus("Outil : Redimensionner"); return; }
+            // Espace fait tourner les outils Deplacer > Tourner > Redimensionner.
+            if (key == KEY_SPACE && !ImGui::GetIO().WantCaptureKeyboard) {
+                m_GizmoMode = (m_GizmoMode + 1) % 3;
+                const char* names[3] = { "Deplacer", "Tourner", "Redimensionner" };
+                SetStatus(std::string("Outil : ") + names[m_GizmoMode]);
+                return;
+            }
         }
         if (key == KEY_F) { FocusSelected(); return; }
+        if (key == KEY_G) {
+            m_GameView = !m_GameView;
+            SetStatus(m_GameView ? "Vue jeu (G) : reperes d'edition caches" : "Vue editeur (G)");
+            return;
+        }
+        if (key == KEY_END) { SnapSelectedToFloor(); return; }
 
         if (key == KEY_N && m_Selected >= 0 && m_Selected < (int)m_Objects.size()) {
             OpenBlueprintEditor(m_Selected);
@@ -2608,151 +3093,412 @@ public:
         m_ScriptTarget = index;
         m_ShowScriptEditor = true;
         m_SelectedNode = -1;
+        m_BpScroll = ImVec2(0.0f, 0.0f);
+        m_BpZoom = 1.0f;
+        m_BpDragNode = -1;
+        m_BpLinkDragNode = -1;
+        m_BpRmbActive = false;
+        m_BpFitRequest = true;
     }
 
-    // Editeur de logique visuel a base de blocs : glisser-deposer, pas de
-    // ligne de code. L'ordre des blocs = ordre d'execution (fleches).
+    // Cadre tous les blocs dans la zone visible (a l'ouverture et avec
+    // "Recentrer"), sinon une longue chaine sortait de l'ecran.
+    void FitBlueprintView(const std::vector<BlueprintNode>& bp, ImVec2 size) {
+        m_BpZoom = 1.0f;
+        m_BpScroll = ImVec2(0.0f, 0.0f);
+        if (bp.empty()) return;
+        float minX = 1e9f, minY = 1e9f, maxX = -1e9f, maxY = -1e9f;
+        for (const auto& n : bp) {
+            minX = std::min(minX, n.pos.x); minY = std::min(minY, n.pos.y);
+            maxX = std::max(maxX, n.pos.x + NodeWidth(n)); maxY = std::max(maxY, n.pos.y + BP_NODE_H);
+        }
+        float w = maxX - minX + 80.0f, h = maxY - minY + 80.0f;
+        float fit = std::min(size.x / w, size.y / h);
+        m_BpZoom = std::min(1.0f, std::max(0.65f, fit));
+        if (fit >= 0.65f) {
+            m_BpScroll = ImVec2((size.x - (maxX - minX) * m_BpZoom) * 0.5f - minX * m_BpZoom,
+                                (size.y - (maxY - minY) * m_BpZoom) * 0.5f - minY * m_BpZoom);
+        } else {
+            // Trop grand meme dezoome : on montre le debut (en haut a gauche),
+            // le reste se voit en deplacant la vue (clic droit + glisser).
+            m_BpScroll = ImVec2(30.0f - minX * m_BpZoom, 30.0f - minY * m_BpZoom);
+        }
+    }
+
+    // ================= Editeur de Blueprint (graphe facon Unreal) =========
+    // Chaque bloc a une broche d'entree blanche a gauche et une (ou deux,
+    // pour une condition : Vrai / Faux) broche de sortie a droite. Les fils
+    // decident de l'ordre d'execution, comme dans Unreal.
+
+    static const char* NodeTitle(const BlueprintNode& n) {
+        const char* label = NODE_TYPES[n.type].label;
+        const char* sep = std::strstr(label, " : ");
+        return sep ? sep + 3 : label;
+    }
+
+    float NodeWidth(const BlueprintNode& n) const {
+        float extra = (NodeCategory(n) == Cat_Condition) ? 100.0f : 64.0f;
+        return std::max(BP_NODE_W, ImGui::CalcTextSize(NodeTitle(n)).x + extra);
+    }
+
+    ImVec2 BpToScreen(const ImVec2& p) const {
+        return ImVec2(m_BpOrigin.x + m_BpScroll.x + p.x * m_BpZoom, m_BpOrigin.y + m_BpScroll.y + p.y * m_BpZoom);
+    }
+    ImVec2 BpToCanvas(const ImVec2& s) const {
+        return ImVec2((s.x - m_BpOrigin.x - m_BpScroll.x) / m_BpZoom, (s.y - m_BpOrigin.y - m_BpScroll.y) / m_BpZoom);
+    }
+    ImVec2 InPinPos(const BlueprintNode& n) const {
+        return BpToScreen(ImVec2(n.pos.x + 12.0f, n.pos.y + BP_HEADER_H * 0.5f));
+    }
+    ImVec2 OutPinPos(const BlueprintNode& n, int pin) const {
+        float y = (pin == 0) ? BP_HEADER_H * 0.5f : BP_HEADER_H + 28.0f;
+        return BpToScreen(ImVec2(n.pos.x + NodeWidth(n) - 12.0f, n.pos.y + y));
+    }
+
+    static void DrawExecPin(ImDrawList* dl, ImVec2 c, float z, bool filled, ImU32 col) {
+        ImVec2 pts[5] = {
+            ImVec2(c.x - 5.0f * z, c.y - 6.0f * z), ImVec2(c.x + 1.0f * z, c.y - 6.0f * z), ImVec2(c.x + 6.0f * z, c.y),
+            ImVec2(c.x + 1.0f * z, c.y + 6.0f * z), ImVec2(c.x - 5.0f * z, c.y + 6.0f * z) };
+        if (filled) dl->AddConvexPolyFilled(pts, 5, col);
+        else dl->AddPolyline(pts, 5, col, ImDrawFlags_Closed, 1.6f * z);
+    }
+
+    static void DrawWire(ImDrawList* dl, ImVec2 a, ImVec2 b, float z, ImU32 col) {
+        float dx = std::max(40.0f * z, std::fabs(b.x - a.x) * 0.5f);
+        dl->AddBezierCubic(a, ImVec2(a.x + dx, a.y), ImVec2(b.x - dx, b.y), b, col, 3.0f * z);
+    }
+
+    int& LinkRef(BlueprintNode& n, int pin) { return pin == 0 ? n.next : n.nextFalse; }
+
+    void AddNodeAt(SceneObject& obj, int type, ImVec2 canvasPos, int linkFrom, int linkPin) {
+        BlueprintNode n;
+        n.type = type;
+        n.pos = canvasPos;
+        obj.blueprint.push_back(n);
+        int idx = (int)obj.blueprint.size() - 1;
+        if (linkFrom >= 0 && linkFrom < idx && NODE_TYPES[type].category != Cat_Event) {
+            LinkRef(obj.blueprint[linkFrom], linkPin) = idx;
+        }
+        m_SelectedNode = idx;
+    }
+
+    void OpenAddMenu(ImVec2 canvasPos, int linkFrom, int linkPin) {
+        m_BpMenuPos = canvasPos;
+        m_BpMenuLinkFrom = linkFrom;
+        m_BpMenuLinkPin = linkPin;
+        m_BpMenuRequest = true;
+    }
+
     void DrawBlueprintEditor(SceneObject& obj) {
-        std::string title = "Blueprint - " + obj.name;
-        ImGui::SetNextWindowSize(ImVec2(620, 520), ImGuiCond_FirstUseEver);
+        std::string title = "Blueprint - " + obj.name + "###BlueprintEditor";
+        ImGui::SetNextWindowSize(ImVec2(900, 600), ImGuiCond_FirstUseEver);
         if (!ImGui::Begin(title.c_str(), &m_ShowScriptEditor)) { ImGui::End(); return; }
+        m_BpWindowFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+        auto& bp = obj.blueprint;
+        if (m_SelectedNode >= (int)bp.size()) m_SelectedNode = -1;
 
-        ImGui::TextWrapped("Les blocs s'executent de haut en bas quand le jeu tourne. Clique un bloc pour regler ses details, glisse-le pour l'organiser.");
-        ImGui::Separator();
-
-        ImGui::SetNextItemWidth(170.0f);
-        ImGui::Combo("##bpcat", &m_BpCategory, CATEGORY_NAMES, IM_ARRAYSIZE(CATEGORY_NAMES));
-        ImGui::SameLine();
-
-        std::vector<int> idxInCat;
-        for (int t = 0; t < NODE_TYPE_COUNT; t++) {
-            if (NODE_TYPES[t].category == m_BpCategory) idxInCat.push_back(t);
-        }
-        if (m_BpTypePick >= (int)idxInCat.size()) m_BpTypePick = 0;
-
-        ImGui::SetNextItemWidth(280.0f);
-        const char* previewLabel = idxInCat.empty() ? "-" : NODE_TYPES[idxInCat[m_BpTypePick]].label;
-        if (ImGui::BeginCombo("##bptype", previewLabel)) {
-            for (int k = 0; k < (int)idxInCat.size(); k++) {
-                bool sel = (k == m_BpTypePick);
-                if (ImGui::Selectable(NODE_TYPES[idxInCat[k]].label, sel)) m_BpTypePick = k;
+        if (ImGui::Button("+ Ajouter un bloc")) {
+            // Si un bloc est selectionne et que sa sortie est libre, le
+            // nouveau bloc se branche derriere lui automatiquement.
+            int from = -1, pin = 0;
+            ImVec2 pos = BpToCanvas(ImVec2(m_BpOrigin.x + 60.0f, m_BpOrigin.y + 60.0f));
+            if (m_SelectedNode >= 0) {
+                BlueprintNode& sel = bp[m_SelectedNode];
+                if (sel.next < 0) from = m_SelectedNode;
+                else if (NodeCategory(sel) == Cat_Condition && sel.nextFalse < 0) { from = m_SelectedNode; pin = 1; }
+                pos = ImVec2(sel.pos.x + NodeWidth(sel) + 60.0f, sel.pos.y + (pin == 1 ? 90.0f : 0.0f));
             }
-            ImGui::EndCombo();
+            OpenAddMenu(pos, from, pin);
         }
         ImGui::SameLine();
-        if (ImGui::Button("+ Ajouter le bloc") && !idxInCat.empty()) {
-            BlueprintNode n;
-            n.type = idxInCat[m_BpTypePick];
-            n.pos = ImVec2(30.0f, 30.0f + (float)obj.blueprint.size() * 96.0f);
-            obj.blueprint.push_back(n);
-            m_SelectedNode = (int)obj.blueprint.size() - 1;
-        }
-        if (ImGui::Button("Charger un exemple adapte a ce type d'objet")) {
+        if (ImGui::Button("Charger un exemple")) {
             obj.blueprint = DefaultBlueprint(obj.shape);
             m_SelectedNode = -1;
+            m_BpFitRequest = true;
         }
-        if (obj.blueprint.empty()) {
-            ImGui::TextDisabled("Blueprint vide : ajoute un bloc, ou clique \"Charger un exemple\" "
-                                "pour partir d'une logique toute faite adaptee a ce type d'objet.");
+        ImGui::SameLine();
+        if (ImGui::Button("Ranger les blocs")) {
+            LayoutChains(bp);
+            m_BpFitRequest = true;
         }
-        ImGui::Separator();
+        ImGui::SameLine();
+        if (ImGui::Button("Recentrer")) m_BpFitRequest = true;
+        ImGui::TextDisabled("Clic droit : ajouter un bloc  |  Tirer une broche blanche : relier  |  Alt+clic sur une broche : couper  |  "
+                            "Clic droit + glisser : deplacer la vue  |  Molette : zoom  |  Suppr : effacer le bloc");
 
-        // Zone de details reservee en bas pour que le canvas ne saute pas.
-        const float detailsHeight = 118.0f;
-        ImVec2 avail = ImGui::GetContentRegionAvail();
-        float canvasVisibleH = avail.y - detailsHeight;
-        if (canvasVisibleH < 120.0f) canvasVisibleH = 120.0f;
+        const float detailsHeight = 100.0f;
+        float canvasH = std::max(140.0f, ImGui::GetContentRegionAvail().y - detailsHeight);
+        ImGui::BeginChild("##bp_canvas", ImVec2(0, canvasH), true,
+            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoMove);
 
-        ImGui::BeginChild("##bp_canvas_child", ImVec2(0, canvasVisibleH), true, ImGuiWindowFlags_HorizontalScrollbar);
+        ImVec2 origin = ImGui::GetCursorScreenPos();
+        ImVec2 size = ImGui::GetContentRegionAvail();
+        if (size.x < 50.0f) size.x = 50.0f;
+        if (size.y < 50.0f) size.y = 50.0f;
+        m_BpOrigin = origin;
+        if (m_BpFitRequest) { FitBlueprintView(bp, size); m_BpFitRequest = false; }
+        ImGui::InvisibleButton("##bp_canvas_btn", size, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+        bool hovered = ImGui::IsItemHovered();
+        ImGuiIO& io = ImGui::GetIO();
+        ImVec2 mouse = io.MousePos;
+        ImVec2 end(origin.x + size.x, origin.y + size.y);
+        bool mouseInCanvas = mouse.x >= origin.x && mouse.x <= end.x && mouse.y >= origin.y && mouse.y <= end.y;
+        const float z = m_BpZoom;
+        int count = (int)bp.size();
 
-        const ImVec2 nodeSize(230.0f, 56.0f);
-        float contentH = 30.0f;
-        for (auto& n : obj.blueprint) contentH = std::max(contentH, n.pos.y + nodeSize.y + 20.0f);
-        ImVec2 canvasSize = ImGui::GetContentRegionAvail();
-        if (canvasSize.y < contentH) canvasSize.y = contentH;
-
-        ImVec2 canvasPos = ImGui::GetCursorScreenPos();
-        ImGui::InvisibleButton("##bp_canvas_bg", canvasSize);
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        ImVec2 canvasEnd(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y);
-        dl->PushClipRect(canvasPos, canvasEnd, true);
-        dl->AddRectFilled(canvasPos, canvasEnd, IM_COL32(28, 28, 36, 255));
-        // Grille en lignes (beaucoup moins de primitives qu'une grille de points).
-        for (float gx = 0.0f; gx < canvasSize.x; gx += 48.0f)
-            dl->AddLine(ImVec2(canvasPos.x + gx, canvasPos.y), ImVec2(canvasPos.x + gx, canvasEnd.y), IM_COL32(48, 48, 60, 255));
-        for (float gy = 0.0f; gy < canvasSize.y; gy += 48.0f)
-            dl->AddLine(ImVec2(canvasPos.x, canvasPos.y + gy), ImVec2(canvasEnd.x, canvasPos.y + gy), IM_COL32(48, 48, 60, 255));
-
-        for (int i = 0; i + 1 < (int)obj.blueprint.size(); i++) {
-            ImVec2 a = { canvasPos.x + obj.blueprint[i].pos.x + nodeSize.x * 0.5f, canvasPos.y + obj.blueprint[i].pos.y + nodeSize.y };
-            ImVec2 b = { canvasPos.x + obj.blueprint[i + 1].pos.x + nodeSize.x * 0.5f, canvasPos.y + obj.blueprint[i + 1].pos.y };
-            dl->AddLine(a, b, IM_COL32(230, 230, 230, 210), 2.5f);
-            ImVec2 mid = { (a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f };
-            dl->AddTriangleFilled(ImVec2(mid.x - 5, mid.y - 5), ImVec2(mid.x + 5, mid.y - 5), ImVec2(mid.x, mid.y + 6), IM_COL32(230, 230, 230, 230));
-        }
-
-        int deleteIndex = -1;
-        for (int i = 0; i < (int)obj.blueprint.size(); i++) {
-            BlueprintNode& node = obj.blueprint[i];
-            if (node.pos.x > canvasSize.x - nodeSize.x) node.pos.x = std::max(0.0f, canvasSize.x - nodeSize.x);
-            if (node.pos.x < 0.0f) node.pos.x = 0.0f;
-            if (node.pos.y < 0.0f) node.pos.y = 0.0f;
-
-            ImVec2 boxMin = { canvasPos.x + node.pos.x, canvasPos.y + node.pos.y };
-            ImVec2 boxMax = { boxMin.x + nodeSize.x, boxMin.y + nodeSize.y };
-            const NodeTypeInfo& info = NODE_TYPES[node.type];
-
-            dl->AddRectFilled(boxMin, boxMax, info.color, 6.0f);
-            ImU32 border = (i == m_SelectedNode) ? IM_COL32(255, 255, 255, 255) : IM_COL32(0, 0, 0, 150);
-            dl->AddRect(boxMin, boxMax, border, 6.0f, 0, (i == m_SelectedNode) ? 3.0f : 2.0f);
-            dl->AddText(ImVec2(boxMin.x + 10, boxMin.y + 10), IM_COL32(25, 25, 25, 255), info.label);
-            std::string sub = NodeSummary(node);
-            if (!sub.empty()) {
-                dl->AddText(ImVec2(boxMin.x + 10, boxMin.y + 32), IM_COL32(35, 35, 35, 210), sub.c_str());
+        // ---- Tests de survol -------------------------------------------
+        auto nodeAt = [&](ImVec2 p) -> int {
+            for (int i = count - 1; i >= 0; i--) {
+                ImVec2 mn = BpToScreen(bp[i].pos);
+                ImVec2 mx(mn.x + NodeWidth(bp[i]) * z, mn.y + BP_NODE_H * z);
+                if (p.x >= mn.x && p.x <= mx.x && p.y >= mn.y && p.y <= mx.y) return i;
             }
+            return -1;
+        };
+        auto nearPin = [&](ImVec2 a, ImVec2 b) {
+            float dx = a.x - b.x, dy = a.y - b.y;
+            return dx * dx + dy * dy <= (11.0f * z) * (11.0f * z);
+        };
+        auto outPinAt = [&](ImVec2 p, int& pinOut) -> int {
+            for (int i = count - 1; i >= 0; i--) {
+                if (nearPin(p, OutPinPos(bp[i], 0))) { pinOut = 0; return i; }
+                if (NodeCategory(bp[i]) == Cat_Condition && nearPin(p, OutPinPos(bp[i], 1))) { pinOut = 1; return i; }
+            }
+            return -1;
+        };
+        auto inPinAt = [&](ImVec2 p) -> int {
+            for (int i = count - 1; i >= 0; i--) {
+                if (NodeCategory(bp[i]) != Cat_Event && nearPin(p, InPinPos(bp[i]))) return i;
+            }
+            return -1;
+        };
 
-            ImGui::PushID(i);
+        // ---- Zoom a la molette, centre sur la souris -----------------------
+        if (hovered && io.MouseWheel != 0.0f) {
+            float newZoom = std::min(1.6f, std::max(0.4f, m_BpZoom * std::pow(1.1f, io.MouseWheel)));
+            ImVec2 cp = BpToCanvas(mouse);
+            m_BpZoom = newZoom;
+            m_BpScroll = ImVec2(mouse.x - origin.x - cp.x * newZoom, mouse.y - origin.y - cp.y * newZoom);
+        }
 
-            // Bouton "x" teste a la main (hors du systeme de widgets ImGui) :
-            // le SmallButton dessine par-dessus l'InvisibleButton du bloc ne
-            // recevait jamais le clic (probleme de resolution de survol par
-            // superposition d'ImGui 1.93), donc on fait le hit-test nous-memes
-            // et on desactive le glisser-deposer du bloc si la souris est dedans.
-            ImVec2 delMin = ImVec2(boxMax.x - 22.0f, boxMin.y + 2.0f);
-            ImVec2 delMax = ImVec2(boxMax.x - 2.0f, boxMin.y + 20.0f);
-            bool overDelete = ImGui::IsMouseHoveringRect(delMin, delMax);
-
-            ImGui::SetCursorScreenPos(boxMin);
-            ImGui::InvisibleButton("##node", nodeSize);
-            if (!overDelete) {
-                if (ImGui::IsItemActivated()) m_SelectedNode = i;
-                if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-                    ImVec2 delta = ImGui::GetIO().MouseDelta;
-                    node.pos.x += delta.x;
-                    node.pos.y += delta.y;
+        // ---- Clic gauche : broche (relier / couper), bloc (selection) ----
+        if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            int pin = 0;
+            int n = outPinAt(mouse, pin);
+            if (n >= 0) {
+                if (io.KeyAlt) LinkRef(bp[n], pin) = -1;
+                else { m_BpLinkDragNode = n; m_BpLinkDragPin = pin; }
+                m_SelectedNode = n;
+            } else if ((n = inPinAt(mouse)) >= 0 && io.KeyAlt) {
+                for (auto& other : bp) {
+                    if (other.next == n) other.next = -1;
+                    if (other.nextFalse == n) other.nextFalse = -1;
                 }
-            }
-
-            ImU32 delCol = overDelete ? IM_COL32(230, 60, 60, 255) : IM_COL32(0, 0, 0, 130);
-            dl->AddRectFilled(delMin, delMax, delCol, 3.0f);
-            dl->AddText(ImVec2(delMin.x + 6.0f, delMin.y + 1.0f), IM_COL32(255, 255, 255, 255), "x");
-            if (overDelete && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                deleteIndex = i;
+                m_SelectedNode = n;
+            } else if ((n = nodeAt(mouse)) >= 0) {
+                m_SelectedNode = n;
+                m_BpDragNode = n;
+            } else {
                 m_SelectedNode = -1;
             }
-            ImGui::PopID();
+        }
+        if (m_BpDragNode >= 0) {
+            if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) || m_BpDragNode >= count) m_BpDragNode = -1;
+            else {
+                bp[m_BpDragNode].pos.x += io.MouseDelta.x / z;
+                bp[m_BpDragNode].pos.y += io.MouseDelta.y / z;
+            }
+        }
+        if (m_BpLinkDragNode >= 0 && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            int from = m_BpLinkDragNode, pin = m_BpLinkDragPin;
+            m_BpLinkDragNode = -1;
+            if (from < count) {
+                int target = inPinAt(mouse);
+                if (target < 0) target = nodeAt(mouse);
+                if (target >= 0) {
+                    if (target != from && NodeCategory(bp[target]) != Cat_Event) LinkRef(bp[from], pin) = target;
+                } else if (mouseInCanvas) {
+                    // Comme Unreal : lacher un fil dans le vide ouvre la liste
+                    // des blocs, et le bloc choisi arrive deja relie.
+                    ImVec2 cp = BpToCanvas(mouse);
+                    OpenAddMenu(ImVec2(cp.x - 12.0f, cp.y - BP_HEADER_H * 0.5f), from, pin);
+                }
+            }
+        }
+
+        // ---- Clic droit : menu (clic simple) ou deplacer la vue (glisser) --
+        if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+            m_BpRmbActive = true;
+            m_BpRmbMoved = 0.0f;
+        }
+        if (m_BpRmbActive) {
+            if (ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
+                m_BpScroll.x += io.MouseDelta.x;
+                m_BpScroll.y += io.MouseDelta.y;
+                m_BpRmbMoved += std::fabs(io.MouseDelta.x) + std::fabs(io.MouseDelta.y);
+            } else {
+                m_BpRmbActive = false;
+                if (m_BpRmbMoved < 5.0f && mouseInCanvas) {
+                    int n = nodeAt(mouse);
+                    if (n >= 0) {
+                        m_SelectedNode = n;
+                        m_BpContextNode = n;
+                        ImGui::OpenPopup("##bp_node_ctx");
+                    } else {
+                        OpenAddMenu(BpToCanvas(mouse), -1, 0);
+                    }
+                }
+            }
+        }
+
+        // ---- Dessin ------------------------------------------------------
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->PushClipRect(origin, end, true);
+        dl->AddRectFilled(origin, end, IM_COL32(38, 38, 38, 255));
+        float step = 16.0f * z;
+        if (step >= 6.0f) {
+            float startX = std::fmod(m_BpScroll.x, step); if (startX < 0.0f) startX += step;
+            float startY = std::fmod(m_BpScroll.y, step); if (startY < 0.0f) startY += step;
+            for (float x = startX; x < size.x; x += step) {
+                int idx = (int)std::lround((x - m_BpScroll.x) / step);
+                dl->AddLine(ImVec2(origin.x + x, origin.y), ImVec2(origin.x + x, end.y), idx % 8 == 0 ? IM_COL32(22, 22, 22, 255) : IM_COL32(48, 48, 48, 255));
+            }
+            for (float y = startY; y < size.y; y += step) {
+                int idx = (int)std::lround((y - m_BpScroll.y) / step);
+                dl->AddLine(ImVec2(origin.x, origin.y + y), ImVec2(end.x, origin.y + y), idx % 8 == 0 ? IM_COL32(22, 22, 22, 255) : IM_COL32(48, 48, 48, 255));
+            }
+        }
+        if (bp.empty()) {
+            const char* hint = "Clic droit ici pour ajouter un bloc (commence par un Evenement, ex : Debut du jeu)";
+            ImVec2 ts = ImGui::CalcTextSize(hint);
+            dl->AddText(ImVec2(origin.x + (size.x - ts.x) * 0.5f, origin.y + size.y * 0.45f), IM_COL32(150, 150, 150, 255), hint);
+        }
+
+        std::vector<bool> hasInput(count, false);
+        for (int i = 0; i < count; i++) {
+            for (int pin = 0; pin < 2; pin++) {
+                int target = pin == 0 ? bp[i].next : bp[i].nextFalse;
+                if (target < 0 || target >= count) continue;
+                hasInput[target] = true;
+                bool hot = (i == m_SelectedNode || target == m_SelectedNode);
+                DrawWire(dl, OutPinPos(bp[i], pin), InPinPos(bp[target]), z, hot ? IM_COL32(255, 255, 255, 255) : IM_COL32(215, 215, 215, 220));
+            }
+        }
+        if (m_BpLinkDragNode >= 0 && m_BpLinkDragNode < count) {
+            DrawWire(dl, OutPinPos(bp[m_BpLinkDragNode], m_BpLinkDragPin), mouse, z, IM_COL32(255, 255, 255, 255));
+        }
+
+        ImFont* font = ImGui::GetFont();
+        float fontSize = ImGui::GetFontSize() * z;
+        for (int i = 0; i < count; i++) {
+            BlueprintNode& node = bp[i];
+            const NodeTypeInfo& info = NODE_TYPES[node.type];
+            int cat = info.category;
+            ImVec2 mn = BpToScreen(node.pos);
+            ImVec2 mx(mn.x + NodeWidth(node) * z, mn.y + BP_NODE_H * z);
+            float headerBottom = mn.y + BP_HEADER_H * z;
+
+            dl->AddRectFilled(ImVec2(mn.x + 3 * z, mn.y + 4 * z), ImVec2(mx.x + 3 * z, mx.y + 4 * z), IM_COL32(0, 0, 0, 90), 7.0f * z);
+            dl->AddRectFilled(mn, mx, IM_COL32(22, 22, 24, 240), 7.0f * z);
+            dl->AddRectFilled(mn, ImVec2(mx.x, headerBottom), info.color, 7.0f * z, ImDrawFlags_RoundCornersTop);
+            bool selected = (i == m_SelectedNode);
+            dl->AddRect(mn, mx, selected ? IM_COL32(245, 165, 35, 255) : IM_COL32(0, 0, 0, 200), 7.0f * z, 0, selected ? 2.5f : 1.0f);
+
+            int r = (info.color >> IM_COL32_R_SHIFT) & 0xFF, g = (info.color >> IM_COL32_G_SHIFT) & 0xFF, b = (info.color >> IM_COL32_B_SHIFT) & 0xFF;
+            bool lightHeader = (r * 299 + g * 587 + b * 114) / 1000 > 150;
+            ImU32 titleCol = lightHeader ? IM_COL32(20, 20, 20, 255) : IM_COL32(255, 255, 255, 255);
+            dl->AddText(font, fontSize, ImVec2(mn.x + 24.0f * z, mn.y + (BP_HEADER_H * z - fontSize) * 0.5f), titleCol, NodeTitle(node));
+
+            std::string sub = NodeSummary(node);
+            if (!sub.empty()) {
+                dl->AddText(font, fontSize, ImVec2(mn.x + 12.0f * z, headerBottom + 8.0f * z), IM_COL32(200, 200, 200, 255), sub.c_str());
+            }
+
+            if (cat != Cat_Event) DrawExecPin(dl, InPinPos(node), z, hasInput[i], IM_COL32(255, 255, 255, 255));
+            ImVec2 out0 = OutPinPos(node, 0);
+            DrawExecPin(dl, out0, z, node.next >= 0, IM_COL32(255, 255, 255, 255));
+            if (cat == Cat_Condition) {
+                ImVec2 out1 = OutPinPos(node, 1);
+                DrawExecPin(dl, out1, z, node.nextFalse >= 0, IM_COL32(255, 255, 255, 255));
+                float vw = ImGui::CalcTextSize("Vrai").x * z, fw = ImGui::CalcTextSize("Faux").x * z;
+                dl->AddText(font, fontSize, ImVec2(out0.x - 12.0f * z - vw, out0.y - fontSize * 0.5f), titleCol, "Vrai");
+                dl->AddText(font, fontSize, ImVec2(out1.x - 12.0f * z - fw, out1.y - fontSize * 0.5f), IM_COL32(230, 230, 230, 255), "Faux");
+            }
         }
         dl->PopClipRect();
-        ImGui::SetCursorScreenPos(canvasPos);
-        ImGui::Dummy(canvasSize);
-        ImGui::EndChild();
 
-        if (deleteIndex >= 0) {
-            obj.blueprint.erase(obj.blueprint.begin() + deleteIndex);
-            if (m_SelectedNode == deleteIndex) m_SelectedNode = -1;
-            else if (m_SelectedNode > deleteIndex) m_SelectedNode--;
+        // ---- Menus ------------------------------------------------------
+        if (m_BpMenuRequest) {
+            ImGui::OpenPopup("##bp_add");
+            m_BpMenuRequest = false;
+        }
+        if (ImGui::BeginPopup("##bp_add")) {
+            bool linking = (m_BpMenuLinkFrom >= 0 && m_BpMenuLinkFrom < count);
+            ImGui::TextDisabled(linking ? "Bloc a relier au fil" : "Toutes les actions pour ce Blueprint");
+            if (ImGui::IsWindowAppearing()) {
+                m_BpSearch.clear();
+                ImGui::SetKeyboardFocusHere();
+            }
+            ImGui::SetNextItemWidth(360.0f);
+            bool enter = ImGui::InputTextWithHint("##bpsearch", "Rechercher...", (char*)m_BpSearch.c_str(), m_BpSearch.capacity() + 1,
+                ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackResize, TextEditCallback, &m_BpSearch);
+            int created = -1, firstMatch = -1;
+            ImGui::BeginChild("##bp_add_list", ImVec2(360.0f, 340.0f));
+            for (int c = 0; c < 4; c++) {
+                if (linking && c == Cat_Event) continue; // un evenement n'a pas d'entree
+                bool header = false;
+                for (int t = 0; t < NODE_TYPE_COUNT; t++) {
+                    if (NODE_TYPES[t].category != c) continue;
+                    if (!m_BpSearch.empty() && !NameMatches(NODE_TYPES[t].label, m_BpSearch)) continue;
+                    if (!header) {
+                        ImGui::Spacing();
+                        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(NODE_TYPES[t].color), "%s", CATEGORY_NAMES[c]);
+                        ImGui::Separator();
+                        header = true;
+                    }
+                    if (firstMatch < 0) firstMatch = t;
+                    ImGui::PushID(t);
+                    if (ImGui::Selectable(NODE_TYPES[t].label)) created = t;
+                    ImGui::PopID();
+                }
+            }
+            if (firstMatch < 0) ImGui::TextDisabled("Aucun bloc ne correspond.");
+            ImGui::EndChild();
+            if (enter && firstMatch >= 0) created = firstMatch;
+            if (created >= 0) {
+                AddNodeAt(obj, created, m_BpMenuPos, linking ? m_BpMenuLinkFrom : -1, m_BpMenuLinkPin);
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+        if (ImGui::BeginPopup("##bp_node_ctx")) {
+            int n = m_BpContextNode;
+            if (n >= 0 && n < (int)bp.size()) {
+                ImGui::TextDisabled("%s", NODE_TYPES[bp[n].type].label);
+                ImGui::Separator();
+                if (ImGui::MenuItem("Dupliquer")) {
+                    BlueprintNode copy = bp[n];
+                    copy.pos.x += 30.0f; copy.pos.y += 30.0f;
+                    copy.next = -1; copy.nextFalse = -1;
+                    bp.push_back(copy);
+                    m_SelectedNode = (int)bp.size() - 1;
+                }
+                if (ImGui::MenuItem("Couper tous ses fils")) {
+                    bp[n].next = -1; bp[n].nextFalse = -1;
+                    for (auto& other : bp) {
+                        if (other.next == n) other.next = -1;
+                        if (other.nextFalse == n) other.nextFalse = -1;
+                    }
+                }
+                if (ImGui::MenuItem("Supprimer", "Suppr")) {
+                    RemoveNode(bp, n);
+                    m_SelectedNode = -1;
+                }
+            }
+            ImGui::EndPopup();
         }
 
+        ImGui::EndChild();
         DrawNodeDetails(obj);
         ImGui::End();
     }
@@ -2850,7 +3596,7 @@ private:
     float m_LastFrameTime = 0.0f;
     float m_FrameDt = 0.0f;
     WEngine::Mat4 m_LastViewProj;
-    float m_ViewportW = 1.0f, m_ViewportH = 1.0f;
+    float m_ViewX = 0.0f, m_ViewY = 0.0f, m_ViewportW = 1.0f, m_ViewportH = 1.0f;
 
     // Parametres du monde (panneau dedie)
     WEngine::Vec3 m_LightDir{ -0.35f, -1.0f, -0.25f };
@@ -2906,7 +3652,22 @@ private:
     float m_WalkCycle = 0.0f;
     float m_SquashTimer = 0.0f;
 
-    bool m_LeftWasDown = false;
+    bool m_LeftWasDown = false, m_RightWasDown = false, m_MiddleWasDown = false;
+    enum NavModeKind { Nav_None, Nav_LmbPending, Nav_LmbFly, Nav_Orbit, Nav_Pan, Nav_Dolly };
+    int m_NavMode = Nav_None;
+    float m_NavLastX = 0.0f, m_NavLastY = 0.0f, m_NavPressX = 0.0f, m_NavPressY = 0.0f;
+    float m_OrbitDist = 8.0f;
+    int m_HoverAxis = -1;
+    bool m_GameView = false;      // touche G : cache grille, gizmo et reperes d'edition
+    bool m_LoopWarned = false;
+    bool m_ClearUiFocus = false;
+    bool m_BpWindowFocused = false;
+
+    // Historique : dernier etat "valide" et son texte (pour comparer vite).
+    std::vector<SceneObject> m_Committed;
+    std::string m_CommittedText;
+    bool m_UndoCheckNeeded = false;
+    bool m_WasInteracting = false;
     int m_DraggingAxis = -1;
     WEngine::Vec3 m_DragOriginPos;
     float m_DragStartOffset = 0.0f;
@@ -2914,8 +3675,17 @@ private:
     bool m_ShowScriptEditor = false;
     int m_ScriptTarget = -1;
     int m_SelectedNode = -1;
-    int m_BpCategory = 0;
-    int m_BpTypePick = 0;
+    ImVec2 m_BpScroll{ 0.0f, 0.0f }, m_BpOrigin{ 0.0f, 0.0f };
+    float m_BpZoom = 1.0f;
+    int m_BpDragNode = -1, m_BpLinkDragNode = -1, m_BpLinkDragPin = 0;
+    bool m_BpRmbActive = false;
+    float m_BpRmbMoved = 0.0f;
+    bool m_BpMenuRequest = false;
+    ImVec2 m_BpMenuPos{ 0.0f, 0.0f };
+    int m_BpMenuLinkFrom = -1, m_BpMenuLinkPin = 0;
+    int m_BpContextNode = -1;
+    bool m_BpFitRequest = false;
+    std::string m_BpSearch;
 };
 
 class SandboxApp : public WEngine::Application {

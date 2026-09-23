@@ -10,13 +10,21 @@
 
 namespace WEngine {
 
+    float ImGuiLayer::s_ViewX = 0.0f, ImGuiLayer::s_ViewY = 0.0f, ImGuiLayer::s_ViewW = 0.0f, ImGuiLayer::s_ViewH = 0.0f;
+
     ImGuiLayer::ImGuiLayer() : Layer("ImGuiLayer") {}
+
+    void ImGuiLayer::GetViewportRect(float& x, float& y, float& w, float& h) {
+        x = s_ViewX; y = s_ViewY; w = s_ViewW; h = s_ViewH;
+    }
 
     void ImGuiLayer::OnAttach() {
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
         ImGuiIO& io = ImGui::GetIO();
-        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+        // Pas de navigation clavier dans les panneaux : elle "volait" Espace,
+        // Fin, les fleches... (Espace ouvrait une liste ou cliquait le dernier
+        // bouton touche au lieu d'agir dans le viewport, comme dans Unreal).
         io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
         // Theme sombre calque sur l'editeur Unreal : gris tres sombres,
@@ -160,6 +168,12 @@ namespace WEngine {
         }
 
         ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), dockFlags);
+        if (ImGuiDockNode* central = ImGui::DockBuilderGetCentralNode(dockspaceId)) {
+            s_ViewX = central->Pos.x;
+            s_ViewY = central->Pos.y;
+            s_ViewW = central->Size.x;
+            s_ViewH = central->Size.y;
+        }
 
         ImGui::End();
     }
