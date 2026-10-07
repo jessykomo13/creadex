@@ -56,6 +56,8 @@ export class Editor {
     this.sv.setSnap(Prefs.get('snap'));
     this.lastSnap = this.snapshot();
     this.mq = matchMedia('(min-width: 900px) and (min-height: 500px)');
+    // téléphone tenu en paysage : panneaux à droite de la vue
+    this.mqSide = matchMedia('(orientation: landscape) and (max-height: 560px)');
     this.applyLayout();
     this.renderAll();
     this.checkScripts();
@@ -67,6 +69,7 @@ export class Editor {
     document.addEventListener('visibilitychange', this.onVis);
     this.onMq = () => this.applyLayout();
     this.mq.addEventListener('change', this.onMq);
+    this.mqSide.addEventListener('change', this.onMq);
     this.console.log({ type: 'log', msg: `Projet « ${this.project.name} » ouvert. Appuie sur ▶ pour jouer.` });
   }
 
@@ -132,11 +135,15 @@ export class Editor {
     this.root = h('div.editor' + (this.project.settings.is2D ? '.is2d' : ''), top, this.main);
     const vh = Prefs.get('viewH');
     if (vh) this.main.style.setProperty('--view-h', vh);
+    const sw = Prefs.get('sideW');
+    if (sw) this.main.style.setProperty('--side-w', sw);
   }
 
   applyLayout() {
     this.wide = this.mq ? this.mq.matches : false;
+    this.side = !this.wide && !!this.mqSide && this.mqSide.matches;
     this.root.classList.toggle('wide', this.wide);
+    this.root.classList.toggle('side', this.side);
     if (this.wide && (this.tab === 'hierarchy' || this.tab === 'inspector')) this.showTab('project');
     this.sv && this.sv.resize();
   }
@@ -147,25 +154,31 @@ export class Editor {
     r.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       r.setPointerCapture(e.pointerId);
-      const top = this.main.getBoundingClientRect().top;
-      const total = this.main.clientHeight;
+      const rect = this.main.getBoundingClientRect();
+      const side = this.side;
       const move = (ev) => {
-        const y = Math.max(120, Math.min(total - 140, ev.clientY - top));
-        const v = Math.round((y / total) * 1000) / 10 + '%';
-        this.main.style.setProperty('--view-h', v);
+        if (side) {
+          // paysage : largeur du panneau de droite
+          const w = Math.max(220, Math.min(rect.width - 220, rect.right - ev.clientX));
+          this.main.style.setProperty('--side-w', Math.round((w / rect.width) * 1000) / 10 + '%');
+        } else {
+          const y = Math.max(120, Math.min(rect.height - 140, ev.clientY - rect.top));
+          this.main.style.setProperty('--view-h', Math.round((y / rect.height) * 1000) / 10 + '%');
+        }
         this.sv.resize();
       };
       const up = () => {
         r.removeEventListener('pointermove', move);
         r.removeEventListener('pointerup', up);
-        Prefs.set('viewH', this.main.style.getPropertyValue('--view-h'));
+        if (side) Prefs.set('sideW', this.main.style.getPropertyValue('--side-w'));
+        else Prefs.set('viewH', this.main.style.getPropertyValue('--view-h'));
       };
       r.addEventListener('pointermove', move);
       r.addEventListener('pointerup', up);
     });
     r.addEventListener('dblclick', () => {
-      this.main.style.removeProperty('--view-h');
-      Prefs.set('viewH', '');
+      this.main.style.removeProperty(this.side ? '--side-w' : '--view-h');
+      Prefs.set(this.side ? 'sideW' : 'viewH', '');
       this.sv.resize();
     });
   }
@@ -949,6 +962,7 @@ export class Editor {
     window.removeEventListener('keydown', this.onKey);
     document.removeEventListener('visibilitychange', this.onVis);
     this.mq.removeEventListener('change', this.onMq);
+    this.mqSide.removeEventListener('change', this.onMq);
     this.sv.dispose();
     this.root.remove();
   }

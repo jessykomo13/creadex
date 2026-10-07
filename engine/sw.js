@@ -1,5 +1,5 @@
 // Service worker de CréaEngine (généré par build.mjs) — fonctionnement hors ligne
-const VERSION = '53c4e223223f';
+const VERSION = 'c05daa17c8ac';
 const CACHE = 'crea-engine-' + VERSION;
 const ASSETS = ["./","index.html","style.css","manifest.webmanifest","dist/app.js","dist/player.js","icons/icon-192.png","icons/icon-512.png","icons/icon-maskable-512.png","icons/apple-touch-icon.png"];
 
