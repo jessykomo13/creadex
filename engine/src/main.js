@@ -3,9 +3,10 @@
 import { Hub } from './hub.js';
 import { Editor } from './editor/editor.js';
 import { Store, requestPersistence } from './storage.js';
-import { normalizeProject } from './templates.js';
+import { normalizeProject, upgradeTemplateScripts } from './templates.js';
 import { injectRuntimeCSS } from './runtime-css.js';
-import { toast, closeTopLayer, h } from './util.js';
+import { toast, closeTopLayer } from './util.js';
+import { initUpdates, announceIfUpdated } from './updater.js';
 
 class App {
   constructor(el) {
@@ -60,6 +61,11 @@ class App {
       this.hub = null;
     }
     normalizeProject(p);
+    const upgraded = upgradeTemplateScripts(p);
+    if (upgraded) {
+      await Store.saveProject(p);
+      setTimeout(() => toast(`🔄 ${upgraded} script(s) du modèle mis à jour avec la nouvelle version`, 'ok', 3500), 800);
+    }
     this.editor = new Editor(this, p);
     this.editor.mount(this.el);
     document.title = p.name + ' — CréaEngine';
@@ -74,39 +80,6 @@ class App {
   }
 }
 
-function registerSW() {
-  if (!('serviceWorker' in navigator) || location.protocol === 'file:') return;
-  let reloading = false;
-  const offer = (reg) => {
-    if (document.querySelector('.update-banner')) return;
-    const apply = async () => {
-      if (window.creaApp && window.creaApp.editor) await window.creaApp.editor.save();
-      reloading = true;
-      if (reg.waiting) reg.waiting.postMessage('skip');
-      else location.reload();
-    };
-    document.body.appendChild(h('div.update-banner', '✨ Nouvelle version disponible — ', h('button', { onclick: apply }, 'Mettre à jour')));
-  };
-  navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (reloading) location.reload();
-  });
-  navigator.serviceWorker
-    .register('./sw.js')
-    .then((reg) => {
-      if (reg.waiting && navigator.serviceWorker.controller) offer(reg);
-      reg.addEventListener('updatefound', () => {
-        const w = reg.installing;
-        if (!w) return;
-        w.addEventListener('statechange', () => {
-          if (w.state === 'installed' && navigator.serviceWorker.controller) offer(reg);
-        });
-      });
-      // vérifie les mises à jour au retour dans l'app
-      document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && reg.update().catch(() => {}));
-    })
-    .catch(() => {});
-}
-
 injectRuntimeCSS();
 document.documentElement.classList.toggle('touch', matchMedia('(pointer: coarse)').matches);
 // empêche le zoom par pincement de Safari hors des zones prévues
@@ -115,4 +88,5 @@ const splash = document.getElementById('splash');
 if (splash) splash.remove();
 window.creaApp = new App(document.getElementById('app'));
 requestPersistence();
-registerSW();
+initUpdates();
+announceIfUpdated();

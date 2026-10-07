@@ -3,6 +3,7 @@
 import { uid } from './util.js';
 import { createGameObject, createComponent, DEFAULT_TAGS } from './components.js';
 import { DEFAULT_ENV } from './builder.js';
+import { APP_VERSION } from './version.js';
 
 const C = (type, props) => createComponent(type, null, props);
 function obj(name, o = {}, comps = []) {
@@ -13,7 +14,19 @@ function obj(name, o = {}, comps = []) {
   return g;
 }
 const scene = (name, objects, env = {}) => ({ id: uid(), name, objects, env: { ...DEFAULT_ENV, ...env } });
-const script = (name, code) => ({ id: uid(), name, code: code.trim() + '\n' });
+/** Empreinte d'un code (pour savoir si un script de modèle a été modifié) */
+export function codeHash(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16);
+}
+const script = (name, code) => {
+  code = code.trim() + '\n';
+  return { id: uid(), name, code, tplHash: codeHash(code) };
+};
 const S = (sc, props = {}) => C('Script', { script: sc.id, props });
 const box = (size, center = [0, 0, 0], extra = {}) => C('BoxCollider', { size, center, ...extra });
 
@@ -651,7 +664,40 @@ export function normalizeProject(p) {
   for (const s of p.scenes) s.env = { ...DEFAULT_ENV, ...(s.env || {}) };
   if (!p.scenes.find((s) => s.id === p.activeScene)) p.activeScene = p.scenes[0].id;
   if (!p.scenes.find((s) => s.id === p.settings.startScene)) p.settings.startScene = p.scenes[0].id;
+  p.engineVersion = APP_VERSION;
   return p;
+}
+
+/**
+ * Met à jour les scripts venant d'un modèle avec leur dernière version,
+ * uniquement s'ils n'ont jamais été modifiés. Retourne le nombre de scripts mis à jour.
+ */
+export function upgradeTemplateScripts(p) {
+  const t = TEMPLATES.find((x) => x.id === p.template);
+  if (!t) return 0;
+  let fresh;
+  try {
+    fresh = createProject('x', t.id).scripts;
+  } catch {
+    return 0;
+  }
+  let n = 0;
+  for (const s of p.scripts || []) {
+    const f = fresh.find((x) => x.name === s.name);
+    if (!f) continue;
+    if (!s.tplHash) {
+      // ancien projet : on suit le script s'il est identique au modèle actuel
+      if (s.code === f.code) s.tplHash = f.tplHash;
+      continue;
+    }
+    if (codeHash(s.code) !== s.tplHash) continue; // modifié par l'utilisateur : on n'y touche pas
+    if (s.code !== f.code) {
+      s.code = f.code;
+      s.tplHash = f.tplHash;
+      n++;
+    }
+  }
+  return n;
 }
 
 export function newScene(name, is2D) {

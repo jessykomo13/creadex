@@ -1,10 +1,13 @@
 // Service worker de CréaEngine (généré par build.mjs) — fonctionnement hors ligne
 const VERSION = '__VERSION__';
+const LABEL = '__LABEL__';
+const NOTES = __NOTES__;
 const CACHE = 'crea-engine-' + VERSION;
 const ASSETS = __ASSETS__;
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)));
+  // « reload » : toujours télécharger les fichiers frais, jamais ceux du cache HTTP
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS.map((u) => new Request(u, { cache: 'reload' })))));
 });
 
 self.addEventListener('activate', (e) => {
@@ -18,6 +21,7 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('message', (e) => {
   if (e.data === 'skip') self.skipWaiting();
+  else if (e.data && e.data.type === 'info' && e.ports && e.ports[0]) e.ports[0].postMessage({ version: VERSION, label: LABEL, notes: NOTES });
 });
 
 self.addEventListener('fetch', (e) => {

@@ -6,8 +6,10 @@ import { TEMPLATES, createProject, normalizeProject } from './templates.js';
 import { DOCS, TUTORIALS } from './docs.js';
 import { exportProjectJSON, exportGameHTML } from './editor/build.js';
 import { runPlayer } from './player-core.js';
+import { APP_VERSION, CHANGELOG } from './version.js';
+import { checkForUpdate, installedVersion, forceRefresh, applyUpdate } from './updater.js';
 
-export const VERSION = '1.0.0';
+export const VERSION = APP_VERSION;
 
 export class Hub {
   constructor(app) {
@@ -293,6 +295,30 @@ export class Hub {
       } }, '🗑️ Effacer toutes les données')
     );
 
+    const build = await installedVersion();
+    const status = h('div.set-sub', `Version ${APP_VERSION}` + (build ? ` • build ${build}` : ''));
+    const checkBtn = h('button.btn.primary', {
+      onclick: async () => {
+        checkBtn.disabled = true;
+        checkBtn.textContent = 'Recherche…';
+        const r = await checkForUpdate({ show: false });
+        checkBtn.disabled = false;
+        checkBtn.textContent = '🔄 Rechercher une mise à jour';
+        if (r.status === 'ready') applyUpdate(r.reg);
+        else if (r.status === 'none') toast('Tu as déjà la dernière version ✓', 'ok');
+        else toast('Mises à jour indisponibles ici (ouvre l\'app installée)', 'warn', 3000);
+      },
+    }, '🔄 Rechercher une mise à jour');
+    box.append(
+      h('div.set-sec', 'Mises à jour'),
+      h('div.set-row', h('div', h('div', 'CréaEngine se met à jour tout seul'), status, h('div.set-sub', 'À l\'ouverture, un écran te propose la nouvelle version. Tes projets sont conservés.'))),
+      h('div.upd-actions', checkBtn, h('button.btn', {
+        onclick: async () => {
+          if (await confirmBox('Réparer l\'app', 'Recharge l\'app depuis internet (si elle semble bloquée sur une ancienne version). Tes projets sont conservés.', { okLabel: 'Réparer' })) forceRefresh();
+        },
+      }, '🛠️ Réparer')),
+      h('details.tuto', h('summary', h('span.tuto-ico', '📝'), 'Historique des versions'), h('div.changelog', CHANGELOG.map((c) => h('div', h('b', 'Version ' + c.version), h('ul', c.notes.map((n) => h('li', n)))))))
+    );
     box.append(
       h('div.set-sec', 'Installation'),
       h('div.note-card', isStandalone() ? h('p', '✅ CréaEngine est installé sur l\'écran d\'accueil et fonctionne hors ligne.') : h('ol', [h('li', 'Ouvre cette page dans Safari.'), h('li', 'Touche Partager ⬆︎.'), h('li', '« Sur l\'écran d\'accueil » → Ajouter.')]))

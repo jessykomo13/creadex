@@ -2,6 +2,7 @@
 import * as esbuild from 'esbuild';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
+import { CHANGELOG } from './src/version.js';
 
 const common = {
   bundle: true,
@@ -19,8 +20,7 @@ await esbuild.build({ ...common, entryPoints: ['src/player-main.js'], format: 'i
 const player = fs.readFileSync('dist/player.js', 'utf8');
 if (/<\/script/i.test(player)) console.warn('⚠️  dist/player.js contient "</script" (échappé à l\'export)');
 
-const files = [
-  'index.html',
+const assets = [
   'style.css',
   'manifest.webmanifest',
   'dist/app.js',
@@ -30,14 +30,29 @@ const files = [
   'icons/icon-maskable-512.png',
   'icons/apple-touch-icon.png',
 ];
-const hash = createHash('sha256');
-for (const f of files) hash.update(fs.readFileSync(f));
-const version = hash.digest('hex').slice(0, 12);
+const sha = (parts) => {
+  const h = createHash('sha256');
+  for (const p of parts) h.update(p);
+  return h.digest('hex').slice(0, 12);
+};
+const assetHash = sha(assets.map((f) => fs.readFileSync(f)));
+
+// index.html : liens versionnés pour ne jamais recevoir d'anciens fichiers du cache du navigateur
+const html = fs
+  .readFileSync('index.html', 'utf8')
+  .replace(/src="dist\/app\.js[^"]*"/, `src="dist/app.js?v=${assetHash}"`)
+  .replace(/href="style\.css[^"]*"/, `href="style.css?v=${assetHash}"`);
+fs.writeFileSync('index.html', html);
+
+const version = sha([assetHash, html]);
+const latest = CHANGELOG[0];
 const sw = fs
   .readFileSync('sw.template.js', 'utf8')
   .replace('__VERSION__', version)
-  .replace('__ASSETS__', JSON.stringify(['./', ...files]));
+  .replace('__LABEL__', latest.version)
+  .replace('__NOTES__', JSON.stringify(latest.notes))
+  .replace('__ASSETS__', JSON.stringify(['./', 'index.html', ...assets]));
 fs.writeFileSync('sw.js', sw);
 
 for (const f of ['dist/app.js', 'dist/player.js']) console.log(`${f}  ${(fs.statSync(f).size / 1024).toFixed(0)} Ko`);
-console.log('sw.js  version ' + version);
+console.log(`sw.js  version ${version}  (${latest.version})`);

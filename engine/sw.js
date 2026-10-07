@@ -1,10 +1,13 @@
 // Service worker de CréaEngine (généré par build.mjs) — fonctionnement hors ligne
-const VERSION = 'c05daa17c8ac';
+const VERSION = 'f43b108066e1';
+const LABEL = '1.1.0';
+const NOTES = ["Mises à jour automatiques : plus besoin de réinstaller","En paysage, Hiérarchie, Inspecteur, Projet et Console à droite","Les scripts des modèles se mettent à jour dans tes projets"];
 const CACHE = 'crea-engine-' + VERSION;
 const ASSETS = ["./","index.html","style.css","manifest.webmanifest","dist/app.js","dist/player.js","icons/icon-192.png","icons/icon-512.png","icons/icon-maskable-512.png","icons/apple-touch-icon.png"];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)));
+  // « reload » : toujours télécharger les fichiers frais, jamais ceux du cache HTTP
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS.map((u) => new Request(u, { cache: 'reload' })))));
 });
 
 self.addEventListener('activate', (e) => {
@@ -18,6 +21,7 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('message', (e) => {
   if (e.data === 'skip') self.skipWaiting();
+  else if (e.data && e.data.type === 'info' && e.ports && e.ports[0]) e.ports[0].postMessage({ version: VERSION, label: LABEL, notes: NOTES });
 });
 
 self.addEventListener('fetch', (e) => {
