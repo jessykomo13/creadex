@@ -3,6 +3,14 @@
 
 export const CHANGELOG = [
   {
+    version: '1.2.0',
+    notes: [
+      'Bibliothèque de scripts : plus de 30 scripts prêts (perso qui marche, caméras, ennemis, pièces, vie, plateformes…)',
+      'Personnages animés prêts à jouer : perso 3D, héros 2D, slime, ennemi 2D et voiture (＋ → Personnages animés)',
+      'Nouveaux modèles : « Monde 3D » (balade dans un monde ouvert) et « Aventure 2D »',
+    ],
+  },
+  {
     version: '1.1.1',
     notes: ['La version installée est affichée en haut des Réglages, dans le Hub et dans le menu ☰ de l\'éditeur'],
   },

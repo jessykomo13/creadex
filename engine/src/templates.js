@@ -1,9 +1,11 @@
 // Modèles de projets (comme les templates du Unity Hub)
 
-import { uid } from './util.js';
+import { uid, codeHash } from './util.js';
 import { createGameObject, createComponent, DEFAULT_TAGS } from './components.js';
 import { DEFAULT_ENV } from './builder.js';
 import { APP_VERSION } from './version.js';
+import { buildCharacter } from './characters.js';
+import { ensureLibScript, upgradeLibScript } from './scriptlib.js';
 
 const C = (type, props) => createComponent(type, null, props);
 function obj(name, o = {}, comps = []) {
@@ -14,15 +16,7 @@ function obj(name, o = {}, comps = []) {
   return g;
 }
 const scene = (name, objects, env = {}) => ({ id: uid(), name, objects, env: { ...DEFAULT_ENV, ...env } });
-/** Empreinte d'un code (pour savoir si un script de modèle a été modifié) */
-export function codeHash(str) {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return (h >>> 0).toString(16);
-}
+export { codeHash };
 const script = (name, code) => {
   code = code.trim() + '\n';
   return { id: uid(), name, code, tplHash: codeHash(code) };
@@ -620,7 +614,214 @@ class Lanceur extends MonoBehaviour {
   p.scenes.push(scene('Bac à sable', objs));
 }
 
+// ===================================================================== Mondes avec personnages animés
+
+function rng(seed) {
+  let a = seed | 0;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const r2 = (v) => Math.round(v * 100) / 100;
+const libC = (p, id, props = {}) => C('Script', { script: ensureLibScript(p, id).script.id, props });
+const goRef = (id) => ({ ref: 'go', id });
+function sparkles(p, a, b) {
+  p.prefabs.push({
+    id: uid(),
+    name: 'Étincelles',
+    objects: [{ id: uid(), name: 'Étincelles', parent: null, active: true, tag: 'Untagged', t: { p: [0, 0, 0], r: [0, 0, 0], s: [1, 1, 1] }, c: [C('ParticleSystem', { loop: false, rate: 0, burst: 28, duration: 0.2, lifetime: 0.6, speed: 4, shape: 'Sphere', size: 0.3, endSize: 0.04, startColor: a, endColor: b, gravity: 0.4 })] }],
+  });
+}
+function endScreens(objs, winText) {
+  const fin = uid();
+  objs.push(
+    obj('Victoire', { active: false }, [C('UIText', { text: winText, fontSize: 34, anchor: 'center', pos: [0, -60], align: 'center', color: '#fde68a' })]),
+    { ...obj('Fin de partie', { active: false }, [C('UIText', { text: 'Oups… 💫', fontSize: 46, anchor: 'center', pos: [0, -70], align: 'center', color: '#fca5a5' })]), id: fin },
+    obj('Rejouer', { parent: fin }, [C('UIButton', { label: 'Rejouer', onClick: 'Rejouer', anchor: 'center', pos: [0, 30], size: [200, 58], color: '#22c55e', fontSize: 24 })])
+  );
+}
+
+function world3D(p) {
+  p.settings.controls = { joystick: true, buttonA: true, buttonB: false, labelA: 'Saut', labelB: 'B' };
+  const R = rng(2024);
+  const objs = [];
+  const hero = buildCharacter('perso3d', p, { position: [0, 1.2, 6] });
+  const heroId = hero.rootId;
+  hero.objects[0].c.push(libC(p, 'vie'));
+  objs.push(
+    obj('Main Camera', { p: [0, 4.5, 13], r: [-15, 0, 0], tag: 'MainCamera' }, [C('Camera', { main: true, fov: 60, far: 400 }), libC(p, 'cam3p', { cible: goRef(heroId) }), libC(p, 'shake')]),
+    obj('Soleil', { p: [6, 14, 14], r: [-50, 35, 0] }, [C('Light', { kind: 'Directional', intensity: 1.5, color: '#fff1d6' }), libC(p, 'suivre', { cible: goRef(heroId) })]),
+    obj('Sol', { s: [10, 1, 10] }, [C('MeshRenderer', { mesh: 'Plane', color: '#5fae55', roughness: 1 }), box([10, 0.02, 10], [0, -0.01, 0])])
+  );
+  objs.push(...hero.objects);
+  for (const [x, y, z, d] of [[-24, -3.2, -20, 9], [27, -3.6, -9, 10], [6, -4.2, -32, 11], [-31, -3.4, 15, 9]])
+    objs.push(obj('Colline', { p: [x, y, z], s: [d, d, d] }, [C('MeshRenderer', { mesh: 'Sphere', color: '#58a14f', roughness: 1 }), C('SphereCollider', { radius: 0.5 })]));
+  objs.push(obj('Lac', { p: [-13, 0.03, 4], s: [1.4, 1, 1] }, [C('MeshRenderer', { mesh: 'Plane', color: '#3b82f6', metalness: 0.3, roughness: 0.12, opacity: 0.88, castShadows: false })]));
+  // forêt
+  const foret = uid();
+  objs.push({ ...obj('Forêt', {}), id: foret });
+  const places = [];
+  const libre = (x, z, min) => Math.hypot(x, z - 4) > 9 && Math.hypot(x + 13, z - 4) > 8 && places.every(([a, b]) => Math.hypot(a - x, b - z) > min);
+  const verts = ['#3f9b4b', '#4caf50', '#2f855a', '#68b04d'];
+  let n = 0;
+  for (let tries = 0; n < 30 && tries < 600; tries++) {
+    const x = r2(R() * 90 - 45), z = r2(R() * 90 - 45);
+    if (!libre(x, z, 4.5)) continue;
+    places.push([x, z]);
+    n++;
+    const t = uid();
+    objs.push({ ...obj('Arbre ' + n, { parent: foret, p: [x, 0, z], r: [0, Math.round(R() * 360), 0] }), id: t });
+    if (R() < 0.4) {
+      objs.push(obj('Tronc', { parent: t, p: [0, 0.6, 0], s: [0.3, 0.6, 0.3] }, [C('MeshRenderer', { mesh: 'Cylinder', color: '#7c4a24' }), C('CylinderCollider', { radius: 0.5, height: 2 })]));
+      for (const [y, k] of [[2, 2.4], [3.1, 1.8], [4, 1.1]]) objs.push(obj('Branches', { parent: t, p: [0, y, 0], s: [k, k * 0.85, k] }, [C('MeshRenderer', { mesh: 'Cone', color: '#2f6b3f', flatShading: true, roughness: 0.9 })]));
+    } else {
+      const k = r2(2.2 + R() * 1.2);
+      objs.push(obj('Tronc', { parent: t, p: [0, 0.9, 0], s: [0.35, 0.9, 0.35] }, [C('MeshRenderer', { mesh: 'Cylinder', color: '#8b5a2b' }), C('CylinderCollider', { radius: 0.5, height: 2 })]));
+      objs.push(obj('Feuillage', { parent: t, p: [0, 2.5, 0], s: [k, r2(k * 0.9), k] }, [C('MeshRenderer', { mesh: 'Icosphere', color: verts[Math.floor(R() * 4)], flatShading: true, roughness: 0.9 })]));
+      objs.push(obj('Feuillage 2', { parent: t, p: [0.4, 3.2, 0.2], s: [1.5, 1.4, 1.5] }, [C('MeshRenderer', { mesh: 'Icosphere', color: '#7cc46a', flatShading: true, roughness: 0.9 })]));
+    }
+  }
+  // rochers et fleurs
+  const deco = uid();
+  objs.push({ ...obj('Décor', {}), id: deco });
+  for (let i = 0; i < 14; i++) {
+    const x = r2(R() * 80 - 40), z = r2(R() * 80 - 40);
+    if (!libre(x, z, 2.5)) continue;
+    const k = r2(0.6 + R() * 1.1);
+    objs.push(obj('Rocher', { parent: deco, p: [x, r2(k * 0.25), z], r: [Math.round(R() * 360), Math.round(R() * 360), 0], s: [k, r2(k * 0.7), k] }, [C('MeshRenderer', { mesh: 'Icosphere', color: '#9ca3af', flatShading: true, roughness: 1 }), C('SphereCollider', { radius: 0.45 })]));
+  }
+  const fleurs = ['#f472b6', '#facc15', '#f87171', '#a78bfa', '#ffffff'];
+  for (let i = 0; i < 36; i++) {
+    const x = r2(R() * 70 - 35), z = r2(R() * 70 - 35);
+    if (Math.hypot(x + 13, z - 4) < 7) continue;
+    objs.push(obj('Fleur', { parent: deco, p: [x, 0.12, z], s: [0.18, 0.18, 0.18] }, [C('MeshRenderer', { mesh: 'Sphere', color: fleurs[i % 5], castShadows: false })]));
+  }
+  // gemmes à ramasser
+  const gemmes = uid();
+  objs.push({ ...obj('Gemmes', {}), id: gemmes });
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2 + R() * 0.4;
+    const d = 8 + R() * 30;
+    objs.push(
+      obj('Gemme', { parent: gemmes, p: [r2(Math.cos(a) * d), 1, r2(Math.sin(a) * d)], s: [0.55, 0.7, 0.55], tag: 'Collectible' }, [
+        C('MeshRenderer', { mesh: 'Icosphere', color: '#c084fc', emissive: '#7e22ce', emissiveIntensity: 0.8, flatShading: true, metalness: 0.3, roughness: 0.2 }),
+        C('SphereCollider', { radius: 0.8, isTrigger: true }),
+        libC(p, 'ramassable'),
+        libC(p, 'flotter'),
+      ])
+    );
+  }
+  // slimes
+  for (const pos of [[12, 1, -6], [-8, 1, -16], [18, 1, 14], [-22, 1, -3]]) {
+    const s = buildCharacter('slime', p, { position: pos });
+    s.objects[0].c.find((c) => c.type === 'Script').props = { cible: goRef(heroId) };
+    objs.push(...s.objects);
+  }
+  // panneau d'accueil
+  const pan = uid();
+  objs.push(
+    { ...obj('Panneau', { p: [2.6, 0, 3.4], r: [0, -20, 0] }, [box([3, 2, 3], [0, 1, 0], { isTrigger: true }), libC(p, 'panneau', { message: 'Bienvenue ! Ramasse les 12 gemmes 💎\nAttention aux slimes 🟢\nGlisse le doigt à droite pour tourner la caméra.' })]), id: pan },
+    obj('Poteau', { parent: pan, p: [0, 0.6, 0], s: [0.12, 0.6, 0.12] }, [C('MeshRenderer', { mesh: 'Cylinder', color: '#7c4a24' })]),
+    obj('Planche', { parent: pan, p: [0, 1.35, 0], s: [1.3, 0.62, 0.08] }, [C('MeshRenderer', { mesh: 'Cube', color: '#c08a3e' })])
+  );
+  objs.push(
+    obj('GameManager', {}, [libC(p, 'gestion', { icone: '💎' })]),
+    obj('Score', {}, [C('UIText', { text: '💎 0 / 12', fontSize: 28, anchor: 'top-left', pos: [18, 22] })]),
+    obj('BarreDeVie', {}, [C('UIImage', { color: '#ef4444', anchor: 'top-right', pos: [18, 30], size: [130, 16], radius: 8 })]),
+    obj('Coeur', {}, [C('UIText', { text: '❤️', fontSize: 20, anchor: 'top-right', pos: [152, 24], shadow: false })]),
+    obj('Message', { active: false }, [C('UIText', { text: '', fontSize: 17, anchor: 'bottom-center', pos: [0, 170], align: 'center' })])
+  );
+  endScreens(objs, 'Bravo ! Toutes les gemmes 🎉');
+  sparkles(p, '#f5d0fe', '#a855f7');
+  p.scenes.push(scene('Monde', objs, { skyTop: '#3d8fe0', skyHorizon: '#d6ecff', skyBottom: '#5fae55', ambientIntensity: 0.6, fog: true, fogColor: '#d6ecff', fogNear: 35, fogFar: 120 }));
+}
+
+function adventure2D(p) {
+  p.settings.is2D = true;
+  p.settings.gravity = [0, -25, 0];
+  p.settings.controls = { joystick: true, buttonA: true, buttonB: false, labelA: 'Saut', labelB: 'B' };
+  const objs = [];
+  const hero = buildCharacter('perso2d', p, { position: [-4, -1.4, 0] });
+  const heroId = hero.rootId;
+  hero.objects[0].c.push(libC(p, 'vie'));
+  const sq = (shape, color, size, order = 0) => C('SpriteRenderer', { shape, color, size, order });
+  objs.push(obj('Main Camera', { p: [-2, 0, 10], tag: 'MainCamera' }, [C('Camera', { main: true, ortho: true, orthoSize: 5.5, clear: 'color', bg: '#8fd3ff' }), libC(p, 'cam2d', { cible: goRef(heroId) }), libC(p, 'shake')]));
+  // décor en parallaxe
+  const layer = (name, z, facteur) => {
+    const id = uid();
+    objs.push({ ...obj(name, { p: [0, 0, z] }, [libC(p, 'parallaxe', { facteur })]), id });
+    return id;
+  };
+  const mont = layer('Montagnes', -9, 0.85);
+  for (let i = 0; i < 7; i++) {
+    const x = i * 9 - 12;
+    objs.push(obj('Montagne', { parent: mont, p: [x, 0.5, 0] }, [sq('Triangle', i % 2 ? '#a9c9ee' : '#bcd6f3', [12, 8], -30)]));
+    objs.push(obj('Neige', { parent: mont, p: [x, 3.4, 0.01] }, [sq('Triangle', '#f8fafc', [3, 2.2], -29)]));
+  }
+  const nua = layer('Nuages', -8, 0.92);
+  for (let i = 0; i < 8; i++) objs.push(obj('Nuage', { parent: nua, p: [i * 8 - 10 + (i % 3), 3.8 + (i % 2) * 1.2, 0] }, [sq('Capsule', '#ffffff', [3.6 + (i % 3), 1.2], -25)]));
+  const col = layer('Collines', -6, 0.6);
+  for (let i = 0; i < 7; i++) objs.push(obj('Colline', { parent: col, p: [i * 11 - 10, -3.6, 0] }, [sq('Circle', i % 2 ? '#8fd47e' : '#a3e08f', [15, 7], -20)]));
+  // niveau
+  const bloc = (name, cx, cy, w, hh) => {
+    const id = uid();
+    objs.push({ ...obj(name, { p: [cx, cy, 0], tag: 'Ground' }, [sq('Square', '#7a4a2a', [w, hh]), box([w, hh, 1])]), id });
+    objs.push(obj('Herbe', { parent: id, p: [0, hh / 2 - 0.1, 0.01] }, [sq('Square', '#5bbf4a', [w, 0.26], 1)]));
+  };
+  bloc('Sol A', 3, -3, 20, 2);
+  bloc('Mur', -8, 1, 1, 10);
+  bloc('Sol B', 27, -3, 16, 2);
+  bloc('Sol C', 44, -2, 14, 4);
+  bloc('Plateforme 1', 5, 0.5, 3, 0.5);
+  bloc('Plateforme 2', 9.5, 2.3, 3, 0.5);
+  bloc('Plateforme 3', 24, 0.3, 2.5, 0.5);
+  bloc('Plateforme 4', 28.5, 2.2, 2.5, 0.5);
+  bloc('Plateforme 5', 33, 3.8, 2, 0.5);
+  objs.push(
+    obj('Plateforme mobile', { p: [16, -3.5, 0] }, [sq('Square', '#f59e0b', [2.4, 0.5]), box([2.4, 0.5, 1]), C('Rigidbody', { isKinematic: true, useGravity: false }), libC(p, 'plateforme', { deplacement: [0, 3, 0], duree: 2, pause: 0.5 })]),
+    obj('Vide', { p: [22, -9, 0] }, [box([90, 2, 4], [0, 0, 0], { isTrigger: true }), libC(p, 'mort')])
+  );
+  const drap = uid();
+  objs.push(
+    { ...obj('Point de contrôle', { p: [20.5, -1.3, 0] }, [sq('Square', '#94a3b8', [0.12, 1.4]), box([1, 1.6, 1], [0, 0, 0], { isTrigger: true }), libC(p, 'checkpoint')]), id: drap },
+    obj('Fanion', { parent: drap, p: [0.3, 0.45, 0.01], r: [0, 0, -90] }, [sq('Triangle', '#e5e7eb', [0.5, 0.55], 1)])
+  );
+  const pieces = [[-1, -1.4], [0, -1.4], [1, -1.4], [5, 1.4], [9.5, 3.2], [10.5, 3.2], [16, 1], [24, 1.2], [28.5, 3.1], [33, 4.7], [33.8, 4.7], [40, 1], [41, 1.6], [42, 1], [46, 1], [47, 1]];
+  for (const [x, y] of pieces) {
+    const id = uid();
+    objs.push(
+      { ...obj('Pièce', { p: [x, y, 0], tag: 'Collectible' }, [sq('Circle', '#fcd34d', [0.5, 0.5], 1), C('SphereCollider', { radius: 0.3, isTrigger: true }), libC(p, 'ramassable', { son: 'sfx:coin' }), libC(p, 'flotter', { hauteur: 0.12, vitesse: 3 })]), id },
+      obj('Brillance', { parent: id, p: [-0.08, 0.08, 0.01] }, [sq('Circle', '#fff7c2', [0.2, 0.2], 2)])
+    );
+  }
+  for (const pos of [[8, -1.65, 0], [26, -1.65, 0], [43, 0.35, 0]]) objs.push(...buildCharacter('ennemi2d', p, { position: pos }).objects);
+  objs.push(
+    obj('Arrivée', { p: [49, 1.2, 0] }, [
+      sq('Star', '#fde047', [1.4, 1.4], 1),
+      box([1.2, 1.2, 1], [0, 0, 0], { isTrigger: true }),
+      libC(p, 'arrivee'),
+      libC(p, 'rotation', { vitesse: [0, 0, 60] }),
+      C('ParticleSystem', { playOnAwake: false, loop: false, rate: 0, burst: 60, lifetime: 1, speed: 5, shape: 'Sphere', size: 0.3, startColor: '#fff59d', endColor: '#f472b6' }),
+    ])
+  );
+  objs.push(...hero.objects);
+  objs.push(
+    obj('GameManager', {}, [libC(p, 'gestion', { icone: '🪙', objectif: -1 })]),
+    obj('Score', {}, [C('UIText', { text: '🪙 0', fontSize: 30, anchor: 'top-left', pos: [18, 22] })]),
+    obj('BarreDeVie', {}, [C('UIImage', { color: '#ef4444', anchor: 'top-right', pos: [18, 30], size: [130, 16], radius: 8 })]),
+    obj('Coeur', {}, [C('UIText', { text: '❤️', fontSize: 20, anchor: 'top-right', pos: [152, 24], shadow: false })])
+  );
+  endScreens(objs, 'Niveau terminé ! ⭐');
+  sparkles(p, '#fff3a0', '#ff9d00');
+  p.scenes.push(scene('Niveau 1', objs, { sky: 'color', bg: '#8fd3ff' }));
+}
+
 export const TEMPLATES = [
+  { id: 'monde3d', name: 'Monde 3D', icon: '🌳', desc: 'Promène un perso animé dans un monde ouvert : forêt, gemmes, slimes, caméra au doigt.', build: world3D },
+  { id: 'aventure2d', name: 'Aventure 2D', icon: '🦸', desc: 'Un héros 2D animé, pièces, ennemis à écraser, plateforme mobile et drapeau.', build: adventure2D },
   { id: '3d', name: '3D vide', icon: '🧊', desc: 'Caméra, lumière, sol et un cube. Le point de départ classique.', build: empty3D },
   { id: '2d', name: '2D vide', icon: '🟧', desc: 'Caméra orthographique et un sprite, pour les jeux 2D.', build: empty2D },
   { id: 'rollaball', name: 'Balle roulante 3D', icon: '⚽', desc: 'Le tuto culte : fais rouler la balle et ramasse tous les bonus.', build: rollABall },
@@ -673,16 +874,20 @@ export function normalizeProject(p) {
  * uniquement s'ils n'ont jamais été modifiés. Retourne le nombre de scripts mis à jour.
  */
 export function upgradeTemplateScripts(p) {
+  let n = 0;
+  // scripts de la bibliothèque
+  for (const s of p.scripts || []) if (s.lib && upgradeLibScript(s)) n++;
+  // scripts propres au modèle
   const t = TEMPLATES.find((x) => x.id === p.template);
-  if (!t) return 0;
+  if (!t) return n;
   let fresh;
   try {
     fresh = createProject('x', t.id).scripts;
   } catch {
-    return 0;
+    return n;
   }
-  let n = 0;
   for (const s of p.scripts || []) {
+    if (s.lib) continue;
     const f = fresh.find((x) => x.name === s.name);
     if (!f) continue;
     if (!s.tplHash) {

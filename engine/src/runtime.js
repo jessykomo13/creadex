@@ -124,7 +124,8 @@ export class Transform {
   set localScale(s) { s = typeof s === 'number' ? new Vector3(s, s, s) : toV3(s); this._o.scale.set(s.x, s.y, s.z); }
   get lossyScale() { this._o.updateWorldMatrix(true, false); this._o.matrixWorld.decompose(_v, _q, _s); return V(_s); }
 
-  _dir(x, y, z) { return V(_v.set(x, y, z).applyQuaternion(this._worldQuat()).normalize()); }
+  // (la rotation est lue avant : _worldQuat() réutilise le vecteur temporaire _v)
+  _dir(x, y, z) { const q = this._worldQuat(); return V(new THREE.Vector3(x, y, z).applyQuaternion(q).normalize()); }
   get forward() { return this._dir(0, 0, -1); }
   set forward(v) { this.rotation = Quaternion.LookRotation(toV3(v)); }
   get back() { return this._dir(0, 0, 1); }
@@ -228,8 +229,8 @@ export class Transform {
     this._o.updateWorldMatrix(true, false);
     return V(this._o.worldToLocal(_v.set(p.x, p.y, p.z)));
   }
-  TransformDirection(a, b, c) { const d = toV3(a, b, c); return V(_v.set(d.x, d.y, d.z).applyQuaternion(this._worldQuat())); }
-  InverseTransformDirection(a, b, c) { const d = toV3(a, b, c); return V(_v.set(d.x, d.y, d.z).applyQuaternion(this._worldQuat().invert())); }
+  TransformDirection(a, b, c) { const d = toV3(a, b, c); const q = this._worldQuat(); return V(new THREE.Vector3(d.x, d.y, d.z).applyQuaternion(q)); }
+  InverseTransformDirection(a, b, c) { const d = toV3(a, b, c); const q = this._worldQuat().invert(); return V(new THREE.Vector3(d.x, d.y, d.z).applyQuaternion(q)); }
   toString() { return `${this.name} (Transform)`; }
 }
 

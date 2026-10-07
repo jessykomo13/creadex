@@ -193,7 +193,7 @@ export class CodeEditor {
         'div.ce-head',
         h('button.ce-back', { onclick: () => this.close() }, '‹ Scène'),
         this.tabsEl,
-        h('button.icon-btn', { title: 'Nouveau script', onclick: async () => { const s = await this.ed.createScriptInteractive(false); if (s) this.open(s.id); } }, '＋'),
+        h('button.icon-btn', { title: 'Nouveau script', onclick: async () => { const s = await this.ed.createScriptFromLibrary({ open: false, askAttach: false }); if (s) this.open(s.id); } }, '＋'),
         h('button.icon-btn', { title: 'Plus', onclick: () => this.menu() }, '⋯')
       ),
       bar,

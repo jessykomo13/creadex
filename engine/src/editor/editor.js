@@ -1,13 +1,15 @@
 // Éditeur principal (mise en page, état, annuler/rétablir, mode Jeu…)
 
-import { h, toast, actionSheet, promptText, confirmBox, debounce, clone, uid, readFile, haptic } from '../util.js';
+import { h, toast, actionSheet, promptText, confirmBox, debounce, clone, uid, readFile, haptic, pickFromList } from '../util.js';
 import { Store, Prefs } from '../storage.js';
 import { SceneView } from './sceneview.js';
 import { Hierarchy } from './hierarchy.js';
 import { Inspector } from './inspector.js';
 import { ProjectPanel } from './projectpanel.js';
 import { ConsolePanel } from './console.js';
-import { CREATE_MENU, createFromMenu, createComponent, createGameObject } from '../components.js';
+import { CREATE_MENU, createFromMenu, createComponent, createGameObject, COLLIDERS, bestColliderFor } from '../components.js';
+import { buildCharacter, CHARACTERS } from '../characters.js';
+import { SCRIPT_LIBRARY, SCRIPT_CATEGORIES, LIB_BY_ID, LIB_NEEDS, addLibScript, ensureLibScript } from '../scriptlib.js';
 import { readTransform } from '../builder.js';
 import { Runtime } from '../runtime.js';
 import { unlockAudio } from '../audio.js';
@@ -393,6 +395,7 @@ export class Editor {
   }
 
   createObject(menuId) {
+    if (menuId.startsWith('char:')) return this.addCharacter(menuId.slice(5));
     const go = createFromMenu(menuId, { is2D: this.sv.is2D });
     const isUI = menuId.startsWith('ui:');
     if (!isUI && !menuId.startsWith('light:Directional') && menuId !== 'camera') {
@@ -673,6 +676,101 @@ export class Editor {
   }
 
   // ------------------------------------------------------------ scripts
+  /** Ajoute un personnage animé (avec ses scripts) et règle la caméra pour le suivre */
+  addCharacter(kind) {
+    if (this.playing) return toast('Arrête le jeu pour modifier la scène', 'warn');
+    const info = CHARACTERS.find((c) => c.id === kind) || { label: kind };
+    const sp = this.sv.spawnPoint();
+    const flat = kind === 'perso2d' || kind === 'ennemi2d';
+    const pos = flat ? [sp[0], sp[1] + 1, 0] : [sp[0], Math.max(sp[1], 0) + 1.2, sp[2]];
+    const { objects, rootId, created } = buildCharacter(kind, this.project, { position: pos });
+    this.scene.objects.push(...objects);
+    let extra = '';
+    // la caméra principale suit le perso
+    if (kind === 'perso3d' || kind === 'perso2d' || kind === 'voiture') {
+      const cams = this.scene.objects.filter((o) => o.c.some((c) => c.type === 'Camera'));
+      const cam = cams.find((o) => o.c.some((c) => c.type === 'Camera' && c.main)) || cams[0];
+      const camComp = cam && cam.c.find((c) => c.type === 'Camera');
+      const want = kind === 'perso2d' ? 'cam2d' : 'cam3p';
+      const libs = cam ? cam.c.filter((c) => c.type === 'Script').map((c) => (this.project.scripts.find((s) => s.id === c.script) || {}).lib) : [];
+      if (cam && !libs.some((l) => ['cam3p', 'camfps', 'cam2d', 'suivre'].includes(l)) && (want === 'cam2d' || !camComp.ortho)) {
+        const r = ensureLibScript(this.project, want);
+        if (r.created) created.push(r.script.name);
+        cam.c.push(createComponent('Script', cam, { script: r.script.id, props: { cible: { ref: 'go', id: rootId } } }));
+        extra = ' La caméra le suit.';
+      }
+      const ctl = this.project.settings.controls;
+      if (!ctl.joystick || !ctl.buttonA) {
+        ctl.joystick = true;
+        ctl.buttonA = true;
+        if (!ctl.labelA || ctl.labelA === 'A') ctl.labelA = 'Saut';
+      }
+    }
+    this.hierarchy.collapsed.add(rootId);
+    this.sv.syncAll();
+    this.select(rootId);
+    this.commit('Personnage');
+    if (created.length) {
+      this.checkScripts();
+      this.projectPanel.render();
+    }
+    toast(`${info.label} ajouté !${extra} Appuie sur ▶ pour jouer.`, 'ok', 3500);
+  }
+
+  /** Liste de la bibliothèque de scripts. Retourne un id, '__empty' ou null */
+  async pickLibraryScript({ includeEmpty = true } = {}) {
+    const items = [];
+    if (includeEmpty) items.push({ label: 'Script vide', value: '__empty', icon: '📄', group: 'Base', desc: 'Une classe avec Start() et Update() à remplir toi-même.' });
+    for (const cat of SCRIPT_CATEGORIES)
+      for (const e of SCRIPT_LIBRARY) if (e.cat === cat) items.push({ label: e.name, value: e.id, icon: e.icon, group: cat, desc: e.desc });
+    const r = await pickFromList('📚 Bibliothèque de scripts', items);
+    return r ? r.value : null;
+  }
+
+  /** Ajoute un script de la bibliothèque à un objet (et le Rigidbody / collider qu'il demande) */
+  attachLibScript(go, libId) {
+    const existing = this.project.scripts.find((s) => s.lib === libId);
+    const s = existing || addLibScript(this.project, libId);
+    go.c.push(createComponent('Script', go, { script: s.id }));
+    const need = LIB_NEEDS[libId];
+    const added = [];
+    if (need && need.rb && !go.c.some((c) => c.type === 'Rigidbody')) {
+      go.c.push(createComponent('Rigidbody', go, need.rb));
+      added.push('Rigidbody');
+    }
+    if (need && !go.c.some((c) => COLLIDERS.includes(c.type))) {
+      const t = need.col || bestColliderFor(go);
+      go.c.push(createComponent(t, go));
+      added.push(t);
+    }
+    if (!existing) {
+      this.checkScripts();
+      this.projectPanel.render();
+    }
+    this.updateGO(go, { hierarchy: true });
+    this.commit('Script de la bibliothèque');
+    this.inspector.render();
+    toast(`« ${s.name} » ajouté à ${go.name}` + (added.length ? ` (+ ${added.join(', ')})` : ''), 'ok', 3000);
+    return s;
+  }
+
+  /** ＋ Script : bibliothèque ou script vide */
+  async createScriptFromLibrary({ open = true, askAttach = true } = {}) {
+    const v = await this.pickLibraryScript();
+    if (!v) return null;
+    if (v === '__empty') return this.createScriptInteractive(open);
+    const go = askAttach && this.selection ? this.getGO(this.selection) : null;
+    if (go && (await confirmBox('Ajouter le script', `Ajouter « ${LIB_BY_ID.get(v).name} » à « ${go.name} » ?`, { okLabel: 'Ajouter' }))) return this.attachLibScript(go, v);
+    const s = addLibScript(this.project, v);
+    this.markDirty();
+    this.checkScripts();
+    this.projectPanel.render();
+    if (open) this.openScript(s.id);
+    else if (!askAttach) return s;
+    else toast(`Script « ${s.name} » ajouté au projet. Ajoute-le à un objet : Inspecteur → Ajouter un composant.`, 'ok', 3500);
+    return s;
+  }
+
   async createScriptInteractive(open = true) {
     const n = await promptText('Nouveau script', 'MonScript', { placeholder: 'NomDuScript' });
     if (!n || !n.trim()) return null;

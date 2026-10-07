@@ -12,7 +12,7 @@ export class ProjectPanel {
     this.audio = new AudioSystem(ed.project);
     const bar = h(
       'div.panel-head.wrap',
-      h('button.btn.sm.primary', { onclick: () => ed.createScriptInteractive(true) }, '＋ Script'),
+      h('button.btn.sm.primary', { onclick: () => ed.createScriptFromLibrary({ open: true, askAttach: true }) }, '＋ Script'),
       h('button.btn.sm', { onclick: () => ed.newSceneInteractive() }, '＋ Scène'),
       h('button.btn.sm', { onclick: () => this.importFiles() }, '📥 Importer')
     );

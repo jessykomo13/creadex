@@ -343,6 +343,12 @@ export function goIcon(go) {
 export const CREATE_MENU = [
   { header: 'Général' },
   { id: 'empty', label: 'Objet vide', icon: '⬜' },
+  { header: 'Personnages animés' },
+  { id: 'char:perso3d', label: 'Perso 3D animé', icon: '🧑‍🚀' },
+  { id: 'char:perso2d', label: 'Héros 2D animé', icon: '🦸' },
+  { id: 'char:slime', label: 'Slime (ennemi 3D)', icon: '🟢' },
+  { id: 'char:ennemi2d', label: 'Ennemi 2D', icon: '👿' },
+  { id: 'char:voiture', label: 'Voiture 3D', icon: '🏎️' },
   { header: 'Objets 3D' },
   ...['Cube', 'Sphere', 'Cylinder', 'Capsule', 'Plane', 'Quad', 'Cone', 'Torus', 'Icosphere', 'Pyramid'].map((m) => ({ id: 'mesh:' + m, label: MESH_LABELS[m], icon: '🧊' })),
   { id: 'text3d', label: 'Texte 3D', icon: '🔠' },

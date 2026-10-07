@@ -142,7 +142,7 @@ export class Hub {
   }
 
   newProject() {
-    let chosen = 'rollaball';
+    let chosen = 'monde3d';
     const nameInp = h('input.input', { value: 'Mon jeu', autocomplete: 'off', spellcheck: false });
     const grid = h('div.tpl-grid');
     const draw = () => {

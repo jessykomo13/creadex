@@ -417,13 +417,22 @@ export class Inspector {
         items.push({ label: def.label, value: type, icon: def.icon, group: cat, sub: has && def.unique ? 'déjà présent' : '' });
       }
       if (cat === 'Scripts') {
+        items.push({ label: 'Bibliothèque de scripts…', value: '__lib', icon: '📚', group: 'Scripts', desc: 'Scripts prêts : perso qui marche, caméra, ennemis, animations…' });
         for (const s of ed.project.scripts) items.push({ label: s.name, value: 'script:' + s.id, icon: '📜', group: 'Scripts' });
-        items.push({ label: 'Nouveau script…', value: '__newscript', icon: '✨', group: 'Scripts' });
+        items.push({ label: 'Nouveau script vide…', value: '__newscript', icon: '✨', group: 'Scripts' });
       }
     }
     const r = await pickFromList('Ajouter un composant', items);
     if (!r) return;
     let comp;
+    if (r.value === '__lib') {
+      const id = await ed.pickLibraryScript({ includeEmpty: false });
+      if (id) {
+        ed.attachLibScript(go, id);
+        requestAnimationFrame(() => (this.el.scrollTop = this.el.scrollHeight));
+      }
+      return;
+    }
     if (r.value === '__newscript') {
       const s = await ed.createScriptInteractive();
       if (!s) return;

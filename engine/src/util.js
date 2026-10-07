@@ -7,6 +7,24 @@ export const uid = () =>
 
 export const clone = (o) => JSON.parse(JSON.stringify(o));
 
+/** Empreinte courte d'un texte (FNV-1a) */
+export function codeHash(str) {
+  let x = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    x ^= str.charCodeAt(i);
+    x = Math.imul(x, 0x01000193);
+  }
+  return (x >>> 0).toString(16);
+}
+
+/** Nom unique : « Nom », « Nom2 », « Nom3 »… */
+export function uniqueName(name, existing) {
+  if (!existing.includes(name)) return name;
+  let i = 2;
+  while (existing.includes(name + i)) i++;
+  return name + i;
+}
+
 export const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 export function debounce(fn, ms) {
@@ -343,7 +361,7 @@ export function pickFromList(title, items, { search = true, emptyText = 'Aucun �
       const q = inp ? inp.value.trim().toLowerCase() : '';
       listEl.innerHTML = '';
       let lastGroup = null;
-      const shown = items.filter((i) => !q || (i.label + ' ' + (i.sub || '') + ' ' + (i.group || '')).toLowerCase().includes(q));
+      const shown = items.filter((i) => !q || (i.label + ' ' + (i.sub || '') + ' ' + (i.desc || '') + ' ' + (i.group || '')).toLowerCase().includes(q));
       if (!shown.length) listEl.appendChild(h('div.pick-empty', emptyText));
       for (const it of shown) {
         if (it.group && it.group !== lastGroup) {
@@ -355,7 +373,7 @@ export function pickFromList(title, items, { search = true, emptyText = 'Aucun �
             'button.sheet-item' + (it.selected ? '.checked' : ''),
             { onclick: () => layer.close({ value: it.value }) },
             h('span.sheet-icon', it.icon || ''),
-            h('span.sheet-label', it.label),
+            h('span.sheet-label', it.label, it.desc ? h('span.sheet-desc', it.desc) : null),
             it.sub ? h('span.sheet-sub', it.sub) : null
           )
         );

@@ -274,6 +274,18 @@ export const SNIPPETS = [
 
 export const TUTORIALS = [
   {
+    title: 'Faire un perso qui bouge',
+    icon: '🏃',
+    steps: [
+      'Dans l\'éditeur, touche ＋ puis « Personnages animés » → « Perso 3D animé » (ou « Héros 2D animé »).',
+      'Il arrive avec ses scripts et ses animations, et la caméra le suit déjà.',
+      'Appuie sur ▶ : joystick pour marcher, A pour sauter (deux fois pour un double saut). En 3D, glisse le doigt à droite de l\'écran pour tourner la caméra.',
+      'Règle la vitesse, la hauteur du saut ou l\'amplitude des animations dans l\'Inspecteur, sans toucher au code.',
+      'Pour donner un comportement à n\'importe quel objet : Inspecteur → Ajouter un composant → 📚 Bibliothèque de scripts (caméra, ennemi, pièce à ramasser, plateforme mobile…).',
+      'Envie de voir comment ça marche ? Touche ✏️ à côté du script pour ouvrir son code et le modifier.',
+    ],
+  },
+  {
     title: 'Premiers pas',
     icon: '🚀',
     steps: [

@@ -1,8 +1,8 @@
 // Service worker de CréaEngine (généré par build.mjs) — fonctionnement hors ligne
-const VERSION = '3bb0d3ead741';
-const LABEL = '1.1.1';
-const NOTES = ["La version installée est affichée en haut des Réglages, dans le Hub et dans le menu ☰ de l'éditeur"]; // nouveautés de la dernière version (texte)
-const CHANGELOG = [{"version":"1.1.1","notes":["La version installée est affichée en haut des Réglages, dans le Hub et dans le menu ☰ de l'éditeur"]},{"version":"1.1.0","notes":["Mises à jour automatiques : plus besoin de réinstaller","En paysage, Hiérarchie, Inspecteur, Projet et Console à droite","Les scripts des modèles se mettent à jour dans tes projets"]},{"version":"1.0.0","notes":["Première version de CréaEngine"]}]; // historique complet
+const VERSION = '7e3bf28103f1';
+const LABEL = '1.2.0';
+const NOTES = ["Bibliothèque de scripts : plus de 30 scripts prêts (perso qui marche, caméras, ennemis, pièces, vie, plateformes…)","Personnages animés prêts à jouer : perso 3D, héros 2D, slime, ennemi 2D et voiture (＋ → Personnages animés)","Nouveaux modèles : « Monde 3D » (balade dans un monde ouvert) et « Aventure 2D »"]; // nouveautés de la dernière version (texte)
+const CHANGELOG = [{"version":"1.2.0","notes":["Bibliothèque de scripts : plus de 30 scripts prêts (perso qui marche, caméras, ennemis, pièces, vie, plateformes…)","Personnages animés prêts à jouer : perso 3D, héros 2D, slime, ennemi 2D et voiture (＋ → Personnages animés)","Nouveaux modèles : « Monde 3D » (balade dans un monde ouvert) et « Aventure 2D »"]},{"version":"1.1.1","notes":["La version installée est affichée en haut des Réglages, dans le Hub et dans le menu ☰ de l'éditeur"]},{"version":"1.1.0","notes":["Mises à jour automatiques : plus besoin de réinstaller","En paysage, Hiérarchie, Inspecteur, Projet et Console à droite","Les scripts des modèles se mettent à jour dans tes projets"]},{"version":"1.0.0","notes":["Première version de CréaEngine"]}]; // historique complet
 const CACHE = 'crea-engine-' + VERSION;
 const ASSETS = ["./","index.html","style.css","manifest.webmanifest","dist/app.js","dist/player.js","icons/icon-192.png","icons/icon-512.png","icons/icon-maskable-512.png","icons/apple-touch-icon.png"];
 
