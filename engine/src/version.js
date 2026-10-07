@@ -3,6 +3,10 @@
 
 export const CHANGELOG = [
   {
+    version: '1.1.1',
+    notes: ['La version installée est affichée en haut des Réglages, dans le Hub et dans le menu ☰ de l\'éditeur'],
+  },
+  {
     version: '1.1.0',
     notes: [
       'Mises à jour automatiques : plus besoin de réinstaller',

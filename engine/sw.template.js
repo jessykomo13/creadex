@@ -1,7 +1,8 @@
 // Service worker de CréaEngine (généré par build.mjs) — fonctionnement hors ligne
 const VERSION = '__VERSION__';
 const LABEL = '__LABEL__';
-const NOTES = __NOTES__;
+const NOTES = __NOTES__; // nouveautés de la dernière version (texte)
+const CHANGELOG = __CHANGELOG__; // historique complet
 const CACHE = 'crea-engine-' + VERSION;
 const ASSETS = __ASSETS__;
 
@@ -21,7 +22,7 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('message', (e) => {
   if (e.data === 'skip') self.skipWaiting();
-  else if (e.data && e.data.type === 'info' && e.ports && e.ports[0]) e.ports[0].postMessage({ version: VERSION, label: LABEL, notes: NOTES });
+  else if (e.data && e.data.type === 'info' && e.ports && e.ports[0]) e.ports[0].postMessage({ version: VERSION, label: LABEL, notes: NOTES, changelog: CHANGELOG });
 });
 
 self.addEventListener('fetch', (e) => {

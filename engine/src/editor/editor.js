@@ -15,6 +15,7 @@ import { requestMotionPermission } from '../input.js';
 import { checkSyntax } from '../compiler.js';
 import { scriptTemplate, sanitizeClassName, newScene } from '../templates.js';
 import { exportGameHTML, exportProjectJSON, projectSettings, runFullscreen } from './build.js';
+import { APP_VERSION } from '../version.js';
 
 const TABS = [
   { id: 'hierarchy', label: 'Hiérarchie', icon: '🗂️' },
@@ -891,6 +892,7 @@ export class Editor {
       { label: 'Sauvegarde automatique', icon: '⏱️', checked: p.get('autosave') !== false, sub: p.get('autosave') !== false ? 'activée' : 'désactivée', onClick: () => p.set('autosave', p.get('autosave') === false) },
       '-',
       { label: 'Retour au Hub', icon: '🏠', onClick: () => this.app.closeProject() },
+      { header: `CréaEngine • version ${APP_VERSION}` },
     ]);
   }
 

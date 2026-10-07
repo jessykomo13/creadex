@@ -51,6 +51,7 @@ const sw = fs
   .replace('__VERSION__', version)
   .replace('__LABEL__', latest.version)
   .replace('__NOTES__', JSON.stringify(latest.notes))
+  .replace('__CHANGELOG__', JSON.stringify(CHANGELOG))
   .replace('__ASSETS__', JSON.stringify(['./', 'index.html', ...assets]));
 fs.writeFileSync('sw.js', sw);
 

@@ -21,6 +21,12 @@ export async function installedVersion() {
   }
 }
 
+function cmpVersion(a, b) {
+  const pa = String(a).split('.').map(Number), pb = String(b).split('.').map(Number);
+  for (let i = 0; i < 3; i++) if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
+  return 0;
+}
+
 function askInfo(worker) {
   return new Promise((res) => {
     const t = setTimeout(() => res(null), 1500);
@@ -71,7 +77,9 @@ async function showUpdateScreen(reg) {
   if (current) return;
   const btn = h('button.upd-btn', 'Mettre à jour');
   const later = h('button.upd-later', 'Plus tard');
-  const notes = (info.notes || []).map((n) => h('li', n));
+  // nouveautés de toutes les versions plus récentes que celle installée
+  const newer = (info.changelog || []).filter((c) => c && c.version && cmpVersion(c.version, APP_VERSION) > 0);
+  const notes = (newer.length ? newer.flatMap((c) => c.notes || []) : info.notes || []).map((n) => h('li', String(n)));
   const screen = h(
     'div.update-screen',
     h(

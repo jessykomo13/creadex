@@ -1,7 +1,8 @@
 // Service worker de CréaEngine (généré par build.mjs) — fonctionnement hors ligne
-const VERSION = 'f43b108066e1';
-const LABEL = '1.1.0';
-const NOTES = ["Mises à jour automatiques : plus besoin de réinstaller","En paysage, Hiérarchie, Inspecteur, Projet et Console à droite","Les scripts des modèles se mettent à jour dans tes projets"];
+const VERSION = '3bb0d3ead741';
+const LABEL = '1.1.1';
+const NOTES = ["La version installée est affichée en haut des Réglages, dans le Hub et dans le menu ☰ de l'éditeur"]; // nouveautés de la dernière version (texte)
+const CHANGELOG = [{"version":"1.1.1","notes":["La version installée est affichée en haut des Réglages, dans le Hub et dans le menu ☰ de l'éditeur"]},{"version":"1.1.0","notes":["Mises à jour automatiques : plus besoin de réinstaller","En paysage, Hiérarchie, Inspecteur, Projet et Console à droite","Les scripts des modèles se mettent à jour dans tes projets"]},{"version":"1.0.0","notes":["Première version de CréaEngine"]}]; // historique complet
 const CACHE = 'crea-engine-' + VERSION;
 const ASSETS = ["./","index.html","style.css","manifest.webmanifest","dist/app.js","dist/player.js","icons/icon-192.png","icons/icon-512.png","icons/icon-maskable-512.png","icons/apple-touch-icon.png"];
 
@@ -21,7 +22,7 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('message', (e) => {
   if (e.data === 'skip') self.skipWaiting();
-  else if (e.data && e.data.type === 'info' && e.ports && e.ports[0]) e.ports[0].postMessage({ version: VERSION, label: LABEL, notes: NOTES });
+  else if (e.data && e.data.type === 'info' && e.ports && e.ports[0]) e.ports[0].postMessage({ version: VERSION, label: LABEL, notes: NOTES, changelog: CHANGELOG });
 });
 
 self.addEventListener('fetch', (e) => {

@@ -38,7 +38,7 @@ export class Hub {
     ];
     const head = h(
       'header.hub-head',
-      h('div.hub-logo', h('img', { src: 'icons/icon-192.png', alt: '' }), h('div', h('div.hub-name', 'CréaEngine'), h('div.hub-sub', 'Hub • moteur de jeu mobile'))),
+      h('div.hub-logo', h('img', { src: 'icons/icon-192.png', alt: '' }), h('div', h('div.hub-name', 'CréaEngine'), h('div.hub-sub', `Hub • version ${APP_VERSION}`))),
       h('div.grow')
     );
     const nav = h(
@@ -256,6 +256,33 @@ export class Hub {
   async renderSettings(c) {
     c.append(h('div.hub-title-row', h('h1', 'Réglages')));
     const box = h('div.settings-list');
+    const build = await installedVersion();
+    const checkBtn = h('button.btn.primary', {
+      onclick: async () => {
+        checkBtn.disabled = true;
+        checkBtn.textContent = 'Recherche…';
+        const r = await checkForUpdate({ show: false });
+        checkBtn.disabled = false;
+        checkBtn.textContent = '🔄 Rechercher une mise à jour';
+        if (r.status === 'ready') applyUpdate(r.reg);
+        else if (r.status === 'none') toast('Tu as déjà la dernière version ✓', 'ok');
+        else toast('Mises à jour indisponibles ici (ouvre l\'app installée)', 'warn', 3000);
+      },
+    }, '🔄 Rechercher une mise à jour');
+    box.append(
+      h(
+        'div.ver-card',
+        h('img', { src: 'icons/icon-192.png', alt: '' }),
+        h('div', h('div.ver-label', 'Version installée'), h('div.ver-num', APP_VERSION), build ? h('div.set-sub', 'build ' + build) : null)
+      ),
+      h('div.set-sub.ver-hint', 'CréaEngine se met à jour tout seul : à l\'ouverture, un écran te propose la nouvelle version. Tes projets sont conservés.'),
+      h('div.upd-actions', checkBtn, h('button.btn', {
+        onclick: async () => {
+          if (await confirmBox('Réparer l\'app', 'Recharge l\'app depuis internet (si elle semble bloquée sur une ancienne version). Tes projets sont conservés.', { okLabel: 'Réparer' })) forceRefresh();
+        },
+      }, '🛠️ Réparer')),
+      h('details.tuto', h('summary', h('span.tuto-ico', '📝'), 'Historique des versions'), h('div.changelog', CHANGELOG.map((c) => h('div', h('b', 'Version ' + c.version), h('ul', c.notes.map((n) => h('li', n)))))))
+    );
     const sw = (label, key, sub) => {
       const inp = h('input.switch', { type: 'checkbox', checked: Prefs.get(key) !== false && !!Prefs.get(key) });
       inp.addEventListener('change', () => Prefs.set(key, inp.checked));
@@ -295,30 +322,6 @@ export class Hub {
       } }, '🗑️ Effacer toutes les données')
     );
 
-    const build = await installedVersion();
-    const status = h('div.set-sub', `Version ${APP_VERSION}` + (build ? ` • build ${build}` : ''));
-    const checkBtn = h('button.btn.primary', {
-      onclick: async () => {
-        checkBtn.disabled = true;
-        checkBtn.textContent = 'Recherche…';
-        const r = await checkForUpdate({ show: false });
-        checkBtn.disabled = false;
-        checkBtn.textContent = '🔄 Rechercher une mise à jour';
-        if (r.status === 'ready') applyUpdate(r.reg);
-        else if (r.status === 'none') toast('Tu as déjà la dernière version ✓', 'ok');
-        else toast('Mises à jour indisponibles ici (ouvre l\'app installée)', 'warn', 3000);
-      },
-    }, '🔄 Rechercher une mise à jour');
-    box.append(
-      h('div.set-sec', 'Mises à jour'),
-      h('div.set-row', h('div', h('div', 'CréaEngine se met à jour tout seul'), status, h('div.set-sub', 'À l\'ouverture, un écran te propose la nouvelle version. Tes projets sont conservés.'))),
-      h('div.upd-actions', checkBtn, h('button.btn', {
-        onclick: async () => {
-          if (await confirmBox('Réparer l\'app', 'Recharge l\'app depuis internet (si elle semble bloquée sur une ancienne version). Tes projets sont conservés.', { okLabel: 'Réparer' })) forceRefresh();
-        },
-      }, '🛠️ Réparer')),
-      h('details.tuto', h('summary', h('span.tuto-ico', '📝'), 'Historique des versions'), h('div.changelog', CHANGELOG.map((c) => h('div', h('b', 'Version ' + c.version), h('ul', c.notes.map((n) => h('li', n)))))))
-    );
     box.append(
       h('div.set-sec', 'Installation'),
       h('div.note-card', isStandalone() ? h('p', '✅ CréaEngine est installé sur l\'écran d\'accueil et fonctionne hors ligne.') : h('ol', [h('li', 'Ouvre cette page dans Safari.'), h('li', 'Touche Partager ⬆︎.'), h('li', '« Sur l\'écran d\'accueil » → Ajouter.')]))
