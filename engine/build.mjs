@@ -29,6 +29,7 @@ const assets = [
   'icons/icon-512.png',
   'icons/icon-maskable-512.png',
   'icons/apple-touch-icon.png',
+  'assets/heros.glb',
 ];
 const sha = (parts) => {
   const h = createHash('sha256');

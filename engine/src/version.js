@@ -3,6 +3,16 @@
 
 export const CHANGELOG = [
   {
+    version: '1.3.0',
+    notes: [
+      'Nouveau héros 3D modélisé, riggé et animé dans Blender : repos, marche, course, saut, chute, danse (bouton B) et salut',
+      'Le modèle « Monde 3D » utilise ce héros ; il est aussi dans ＋ → Personnages animés',
+      'Import de tes propres modèles Blender (.glb) avec leurs animations : Projet → 📥 Importer',
+      'Nouveaux composants Modèle 3D et Animator (Play, CrossFade…) + script « Animation d’un modèle 3D »',
+      'La caméra dans la vue Scène est un petit modèle de 10 cm au lieu d’une grosse icône',
+    ],
+  },
+  {
     version: '1.2.2',
     notes: [
       'Le champ de vision des caméras est toujours visible dans la vue Scène (lignes blanches, en jaune si la caméra est sélectionnée), même pendant le jeu',

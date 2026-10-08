@@ -381,6 +381,64 @@ class TremblementCamera extends MonoBehaviour {
 }`),
 
   // ================================================================ Animation
+  S('animModele', 'AnimationModele', 'Animation d’un modèle 3D (Blender)', '💃', 'Animation',
+    'Choisit l’animation du modèle selon les mouvements : Repos, Marche, Course, Saut, Chute. Bouton B : Danse. À mettre sur le perso (avec Rigidbody) ; l’Animator peut être sur un enfant.', `
+class AnimationModele extends MonoBehaviour {
+  vitesseCourse = 3.2;   // au-dessus : on court
+  fondu = 0.18;          // durée des transitions (s)
+  danseAvecB = true;
+
+  Start() {
+    this.anim = this.GetComponentInChildren("Animator");
+    this.rb = this.GetComponent("Rigidbody");
+    this.perso = this.GetComponent("PersoController3D");
+    this.etat = "";
+    this.danse = false;
+    this.enSaut = 0;
+  }
+
+  // message envoyé par PersoController3D quand il saute
+  AuSaut() {
+    this.enSaut = 0.3;
+    this.danse = false;
+    this.etat = ""; // rejoue le saut (double saut)
+    this.Jouer("Saut", 0.08, false);
+  }
+
+  Jouer(nom, fondu, boucle = true) {
+    if (this.etat === nom) return;
+    this.etat = nom;
+    this.anim.CrossFade(nom, fondu, boucle);
+  }
+
+  Update() {
+    if (!this.anim || !this.rb) return;
+    const v = this.rb.velocity;
+    const vh = Math.sqrt(v.x * v.x + v.z * v.z);
+    const auSol = this.perso ? this.perso.auSol : Math.abs(v.y) < 0.3;
+    if (this.danseAvecB && Input.GetButtonDown("Fire1")) this.danse = !this.danse;
+    if (vh > 0.3) this.danse = false;
+    this.anim.speed = 1;
+    this.enSaut -= Time.deltaTime;
+    if (this.enSaut > 0) return;
+
+    if (!auSol) {
+      // tombe d'une plateforme sans avoir sauté
+      if (v.y < -2 && this.etat !== "Saut") this.Jouer("Chute", 0.25);
+      return;
+    }
+    if (vh > this.vitesseCourse) {
+      this.Jouer("Course", this.fondu);
+      this.anim.speed = Mathf.Clamp(vh / 5, 0.8, 1.4);
+    } else if (vh > 0.3) {
+      this.Jouer("Marche", this.fondu);
+      this.anim.speed = Mathf.Clamp(vh / 2, 0.7, 1.6);
+    } else {
+      this.Jouer(this.danse ? "Danse" : "Repos", this.danse ? 0.3 : this.fondu);
+    }
+  }
+}`),
+
   S('anim3d', 'AnimationPerso3D', 'Animation de perso 3D', '🕺', 'Animation',
     'Marche, course, saut, respiration et clignement des yeux, sans fichier d’animation. Anime les enfants Corps, Corps/Tête, Corps/BrasG, Corps/BrasD, JambeG, JambeD.', `
 class AnimationPerso3D extends MonoBehaviour {

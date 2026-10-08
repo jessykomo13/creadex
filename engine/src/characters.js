@@ -2,12 +2,14 @@
 
 import { createGameObject, createComponent } from './components.js';
 import { ensureLibScript } from './scriptlib.js';
+import { ensureBuiltinModel } from './builder.js';
 
 const C = (type, props) => createComponent(type, null, props);
 const mesh = (m, color, extra = {}) => C('MeshRenderer', { mesh: m, color, ...extra });
 const sprite = (shape, color, size, order = 0, extra = {}) => C('SpriteRenderer', { shape, color, size, order, ...extra });
 
 export const CHARACTERS = [
+  { id: 'heros3d', label: 'Héros 3D (modèle Blender)', icon: '🧑‍🎤', desc: 'Modélisé et animé dans Blender : repos, marche, course, saut, chute, danse (bouton B), salut.' },
   { id: 'perso3d', label: 'Perso 3D animé', icon: '🧑‍🚀', desc: 'Marche, court, saute (double saut), cligne des yeux.' },
   { id: 'perso2d', label: 'Héros 2D animé', icon: '🦸', desc: 'Plateforme : s’étire, s’écrase, ses pieds courent.' },
   { id: 'slime', label: 'Slime (ennemi 3D)', icon: '🟢', desc: 'Sautille vers le joueur et le repousse.' },
@@ -36,6 +38,19 @@ export function buildCharacter(kind, project, { position = [0, 0, 0], name } = {
 
   let root;
   switch (kind) {
+    case 'heros3d': {
+      const model = ensureBuiltinModel(project, 'heros');
+      root = node(name || 'Héros', null, { p: position, tag: 'Player' }, [
+        C('Rigidbody', { mass: 1, friction: 0, drag: 0, angularDrag: 0, freezeRot: [true, true, true] }),
+        C('CapsuleCollider', { radius: 0.32, height: 1.5 }),
+        script('perso3d'),
+        script('animModele'),
+      ]);
+      // le modèle a ses pieds à l'origine : on le descend au bas de la capsule
+      node('Modèle', root, { p: [0, -0.75, 0] }, [C('ModelRenderer', { model: model.id }), C('Animator', { clip: 'Repos' })]);
+      break;
+    }
+
     case 'perso3d': {
       const peau = '#ffd2a8', pull = '#ff7a3d', pantalon = '#334155', casquette = '#3b82f6';
       root = node(name || 'Perso', null, { p: position, tag: 'Player' }, [

@@ -645,10 +645,10 @@ function endScreens(objs, winText) {
 }
 
 function world3D(p) {
-  p.settings.controls = { joystick: true, buttonA: true, buttonB: false, labelA: 'Saut', labelB: 'B' };
+  p.settings.controls = { joystick: true, buttonA: true, buttonB: true, labelA: 'Saut', labelB: 'Danse' };
   const R = rng(2024);
   const objs = [];
-  const hero = buildCharacter('perso3d', p, { position: [0, 1.2, 6] });
+  const hero = buildCharacter('heros3d', p, { position: [0, 1.2, 6] });
   const heroId = hero.rootId;
   hero.objects[0].c.push(libC(p, 'vie'));
   objs.push(
@@ -820,7 +820,7 @@ function adventure2D(p) {
 }
 
 export const TEMPLATES = [
-  { id: 'monde3d', name: 'Monde 3D', icon: '🌳', desc: 'Promène un perso animé dans un monde ouvert : forêt, gemmes, slimes, caméra au doigt.', build: world3D },
+  { id: 'monde3d', name: 'Monde 3D', icon: '🌳', desc: 'Promène un héros modélisé dans Blender (marche, course, saut, danse) dans un monde ouvert : forêt, gemmes, slimes, caméra au doigt.', build: world3D },
   { id: 'aventure2d', name: 'Aventure 2D', icon: '🦸', desc: 'Un héros 2D animé, pièces, ennemis à écraser, plateforme mobile et drapeau.', build: adventure2D },
   { id: '3d', name: '3D vide', icon: '🧊', desc: 'Caméra, lumière, sol et un cube. Le point de départ classique.', build: empty3D },
   { id: '2d', name: '2D vide', icon: '🟧', desc: 'Caméra orthographique et un sprite, pour les jeux 2D.', build: empty2D },

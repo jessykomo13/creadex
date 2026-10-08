@@ -62,6 +62,29 @@ export const COMPONENTS = {
       { k: 'order', t: 'int', label: 'Ordre', d: 0 },
     ],
   },
+  ModelRenderer: {
+    label: 'Modèle 3D',
+    icon: '🧍',
+    cat: 'Rendu',
+    unique: true,
+    fields: [
+      { k: 'model', t: 'model', label: 'Modèle (.glb)', d: '' },
+      { k: 'scale', t: 'num', label: 'Taille', d: 1, min: 0.001 },
+      { k: 'castShadows', t: 'bool', label: 'Projette ombres', d: true },
+      { k: 'receiveShadows', t: 'bool', label: 'Reçoit ombres', d: true },
+    ],
+  },
+  Animator: {
+    label: 'Animator',
+    icon: '🎞️',
+    cat: 'Rendu',
+    unique: true,
+    fields: [
+      { k: 'clip', t: 'clip', label: 'Animation de départ', d: '' },
+      { k: 'playOnStart', t: 'bool', label: 'Jouer au lancement', d: true },
+      { k: 'speed', t: 'num', label: 'Vitesse', d: 1, min: 0 },
+    ],
+  },
   Text3D: {
     label: 'Texte 3D',
     icon: '🔠',
@@ -333,6 +356,7 @@ export function goIcon(go) {
   if (types.includes('ParticleSystem')) return '✨';
   if (types.includes('SpriteRenderer')) return '🖼️';
   if (types.includes('Text3D')) return '🔠';
+  if (types.includes('ModelRenderer')) return '🧍';
   if (types.includes('MeshRenderer')) return go.c.find((c) => c.type === 'Rigidbody') ? '🪨' : '🧊';
   if (types.includes('Script')) return '📜';
   if (types.includes('AudioSource')) return '🔊';
@@ -344,6 +368,7 @@ export const CREATE_MENU = [
   { header: 'Général' },
   { id: 'empty', label: 'Objet vide', icon: '⬜' },
   { header: 'Personnages animés' },
+  { id: 'char:heros3d', label: 'Héros 3D (modèle Blender)', icon: '🧑‍🎤' },
   { id: 'char:perso3d', label: 'Perso 3D animé', icon: '🧑‍🚀' },
   { id: 'char:perso2d', label: 'Héros 2D animé', icon: '🦸' },
   { id: 'char:slime', label: 'Slime (ennemi 3D)', icon: '🟢' },

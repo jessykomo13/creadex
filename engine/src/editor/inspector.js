@@ -2,7 +2,7 @@
 
 import { h, toast, actionSheet, pickFromList, promptText, pickFiles } from '../util.js';
 import { COMPONENTS, CATEGORIES, createComponent, bestColliderFor, COLLIDERS, SFX } from '../components.js';
-import { DEFAULT_ENV } from '../builder.js';
+import { DEFAULT_ENV, loadModel, ensureBuiltinModel } from '../builder.js';
 import { extractFields } from '../compiler.js';
 import * as API from '../api.js';
 import { EditorRef } from '../api.js';
@@ -211,6 +211,7 @@ export class Inspector {
     ];
     const sec = this.section(go.id + ':' + index + ':' + c.type, def.icon, title, en, menu);
     const body = sec.querySelector('.csec-body');
+    this.curGo = go;
     if (c.type === 'Script') this.scriptBody(go, c, body, script);
     else {
       const vis = FIELD_VISIBILITY[c.type] || {};
@@ -361,6 +362,10 @@ export class Inspector {
         return row(label, textField({ value, multiline: true, onInput: inp, onCommit: com }));
       case 'image':
         return row(label, this.imagePicker(value, com));
+      case 'model':
+        return row(label, this.modelPicker(value, (v) => { com(v); this.render(); }));
+      case 'clip':
+        return row(label, this.clipSelect(value, com));
       case 'sfx':
         return row(label, this.sfxSelect(value, com));
       default:
@@ -391,6 +396,56 @@ export class Inspector {
         onPick(v);
       },
     });
+  }
+
+  modelPicker(value, onPick) {
+    const ed = this.ed;
+    const asset = value && ed.project.assets.find((a) => a.id === value || a.name === value);
+    return pickerField({
+      label: asset ? '🧍 ' + asset.name : '— Aucun —',
+      title: 'Choisir un modèle 3D',
+      items: () => {
+        const models = ed.project.assets.filter((a) => a.kind === 'model');
+        return [
+          { label: 'Importer un modèle (.glb)…', value: '__import', icon: '📥' },
+          ...(models.some((a) => a.builtin === 'heros') ? [] : [{ label: 'Héros (Blender), fourni avec CréaEngine', value: '__heros', icon: '🧑‍🎤' }]),
+          { label: '— Aucun —', value: '', icon: '⊘' },
+          ...models.map((a) => ({ label: a.name, value: a.id, icon: '🧍' })),
+        ];
+      },
+      onPick: async (v) => {
+        if (v === '__import') {
+          const files = await pickFiles('', false);
+          if (!files.length) return;
+          const a = await ed.importAsset(files[0]);
+          if (a && a.kind === 'model') onPick(a.id);
+          return;
+        }
+        if (v === '__heros') {
+          const a = ensureBuiltinModel(ed.project, 'heros');
+          ed.projectPanel.render();
+          onPick(a.id);
+          return;
+        }
+        onPick(v);
+      },
+    });
+  }
+
+  /** Liste des animations du modèle de l'objet (composant Animator) */
+  clipSelect(value, onChange) {
+    const go = this.curGo;
+    const mr = go && go.c.find((c) => c.type === 'ModelRenderer');
+    const asset = mr && this.ed.project.assets.find((a) => a.id === mr.model || a.name === mr.model);
+    let names = [];
+    if (asset) {
+      const rec = loadModel(asset);
+      if (rec.ready) names = (rec.gltf.animations || []).map((a) => a.name);
+      else if (!rec.failed) loadModel(asset, () => this.ed.selection === (go && go.id) && this.render());
+    }
+    if (!names.length) return textField({ value, onCommit: onChange });
+    const opts = names.includes(value) || !value ? names : [value, ...names];
+    return selectField({ value: value || '', options: ['', ...opts], labels: { '': '(la première)' }, onChange });
   }
 
   sfxSelect(value, onChange) {

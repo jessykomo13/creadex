@@ -10,7 +10,8 @@ import { ConsolePanel } from './console.js';
 import { CREATE_MENU, createFromMenu, createComponent, createGameObject, COLLIDERS, bestColliderFor } from '../components.js';
 import { buildCharacter, CHARACTERS } from '../characters.js';
 import { SCRIPT_LIBRARY, SCRIPT_CATEGORIES, LIB_BY_ID, LIB_NEEDS, addLibScript, ensureLibScript } from '../scriptlib.js';
-import { readTransform } from '../builder.js';
+import { readTransform, modelReady } from '../builder.js';
+import * as THREE from 'three';
 import { Runtime } from '../runtime.js';
 import { unlockAudio } from '../audio.js';
 import { requestMotionPermission } from '../input.js';
@@ -612,8 +613,45 @@ export class Editor {
     img.src = asset.data;
   }
 
+  /** Place un modèle 3D importé dans la scène (avec Animator s'il a des animations) */
+  async createModelObject(asset) {
+    if (this.playing) return toast('Arrête le jeu pour modifier la scène', 'warn');
+    const gltf = await modelReady(asset);
+    if (!gltf) return toast('Modèle illisible : ' + asset.name, 'error', 3000);
+    const go = createGameObject(asset.name);
+    const mr = createComponent('ModelRenderer', go, { model: asset.id });
+    // taille raisonnable pour les modèles exportés en centimètres (ou minuscules)
+    const box = new THREE.Box3().setFromObject(gltf.scene);
+    const hgt = box.isEmpty() ? 1 : box.max.y - box.min.y;
+    if (hgt > 20 || hgt < 0.05) mr.scale = Math.round((1.7 / hgt) * 10000) / 10000;
+    go.c.push(mr);
+    const clips = gltf.animations || [];
+    if (clips.length) go.c.push(createComponent('Animator', go, { clip: (clips.find((c) => /^(repos|idle)/i.test(c.name)) || clips[0]).name }));
+    go.t.p = this.sv.spawnPoint();
+    this.addObject(go);
+    toast(clips.length ? `${asset.name} placé : ${clips.length} animation(s) (${clips.map((c) => c.name).slice(0, 6).join(', ')})` : `${asset.name} placé`, 'ok', 3500);
+  }
+
   async importAsset(file) {
     const name = file.name.replace(/\.[^.]+$/, '');
+    if (/\.(glb|gltf)$/i.test(file.name)) {
+      if (file.size > 25 * 1024 * 1024) {
+        toast('Modèle trop lourd (max 25 Mo)', 'error');
+        return null;
+      }
+      const data = await readFile(file);
+      const a = { id: uid(), name: uniqueName(name, this.project.assets.map((x) => x.name)), kind: 'model', data };
+      const gltf = await modelReady(a);
+      if (!gltf) {
+        toast('Modèle illisible. Exporte-le depuis Blender en glTF binaire (.glb), textures incluses.', 'error', 4500);
+        return null;
+      }
+      this.project.assets.push(a);
+      this.markDirty();
+      this.projectPanel.render();
+      toast(`Modèle importé : ${a.name} (${gltf.animations.length} animation(s))`, 'ok', 2500);
+      return a;
+    }
     if (file.type.startsWith('image/')) {
       let data = await readFile(file);
       data = await shrinkImage(data, 1024);
@@ -687,7 +725,7 @@ export class Editor {
     this.scene.objects.push(...objects);
     let extra = '';
     // la caméra principale suit le perso
-    if (kind === 'perso3d' || kind === 'perso2d' || kind === 'voiture') {
+    if (kind === 'heros3d' || kind === 'perso3d' || kind === 'perso2d' || kind === 'voiture') {
       const cams = this.scene.objects.filter((o) => o.c.some((c) => c.type === 'Camera'));
       const cam = cams.find((o) => o.c.some((c) => c.type === 'Camera' && c.main)) || cams[0];
       const camComp = cam && cam.c.find((c) => c.type === 'Camera');
@@ -705,15 +743,17 @@ export class Editor {
         ctl.buttonA = true;
         if (!ctl.labelA || ctl.labelA === 'A') ctl.labelA = 'Saut';
       }
+      if (kind === 'heros3d') {
+        ctl.buttonB = true;
+        if (!ctl.labelB || ctl.labelB === 'B') ctl.labelB = 'Danse';
+      }
     }
     this.hierarchy.collapsed.add(rootId);
     this.sv.syncAll();
     this.select(rootId);
     this.commit('Personnage');
-    if (created.length) {
-      this.checkScripts();
-      this.projectPanel.render();
-    }
+    if (created.length) this.checkScripts();
+    this.projectPanel.render();
     toast(`${info.label} ajouté !${extra} Appuie sur ▶ pour jouer.`, 'ok', 3500);
   }
 

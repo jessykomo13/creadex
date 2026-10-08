@@ -1,6 +1,9 @@
 // Construction des objets three.js à partir des données de scène (partagé éditeur / jeu)
 
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { uid } from './util.js';
 
 export const ICON_LAYER = 1; // icônes & aides visibles seulement dans la vue Scène
 
@@ -45,6 +48,167 @@ const unitPlane = new THREE.PlaneGeometry(1, 1);
 unitPlane.userData.shared = true;
 
 // ---------------------------------------------------------------- Textures
+
+// ---------------------------------------------------------------- Modèles 3D (.glb)
+
+/** Modèles fournis avec CréaEngine (le fichier est lu dans l'app, puis intégré à l'export du jeu) */
+export const BUILTIN_MODELS = {
+  heros: { file: 'assets/heros.glb', name: 'Héros (Blender)' },
+};
+
+export function builtinModelUrl(id) {
+  const m = BUILTIN_MODELS[id];
+  return m ? new URL(m.file, document.baseURI).href : null;
+}
+
+/** Ajoute (une seule fois) un modèle intégré aux ressources du projet */
+export function ensureBuiltinModel(project, id) {
+  project.assets = project.assets || [];
+  let a = project.assets.find((x) => x.kind === 'model' && x.builtin === id);
+  if (!a) {
+    a = { id: uid(), name: BUILTIN_MODELS[id].name, kind: 'model', builtin: id, data: '' };
+    project.assets.push(a);
+  }
+  return a;
+}
+
+function dataUrlToBuffer(url) {
+  const bin = atob(url.slice(url.indexOf(',') + 1));
+  const buf = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+  return buf.buffer;
+}
+
+const modelCache = new Map();
+/**
+ * Charge un modèle (une seule fois par fichier, partagé entre l'éditeur et le jeu).
+ * Retourne { ready, failed, gltf } ; onReady(gltf) est appelé quand il est prêt.
+ */
+export function loadModel(asset, onReady, onFail) {
+  const key = asset.data ? asset.id + ':' + asset.data.length : 'builtin:' + asset.builtin;
+  let rec = modelCache.get(key);
+  if (!rec) {
+    rec = { ready: false, failed: false, gltf: null, waiters: [], failers: [] };
+    modelCache.set(key, rec);
+    const done = (gltf) => {
+      // géométries et matériaux partagés entre toutes les copies du modèle
+      gltf.scene.traverse((o) => {
+        if (o.geometry) o.geometry.userData.shared = true;
+        if (o.material) for (const m of [].concat(o.material)) m.userData.shared = true;
+      });
+      rec.gltf = gltf;
+      rec.ready = true;
+      const w = rec.waiters;
+      rec.waiters = rec.failers = [];
+      w.forEach((f) => f(gltf));
+    };
+    const fail = (e) => {
+      rec.failed = true;
+      rec.error = e;
+      const w = rec.failers;
+      rec.waiters = rec.failers = [];
+      w.forEach((f) => f(e));
+      console.warn('Modèle 3D illisible : ' + asset.name, e);
+    };
+    const parse = (buf) => new GLTFLoader().parse(buf, '', done, fail);
+    try {
+      if (asset.data) parse(dataUrlToBuffer(asset.data));
+      else if (asset.builtin && BUILTIN_MODELS[asset.builtin])
+        fetch(builtinModelUrl(asset.builtin))
+          .then((r) => {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.arrayBuffer();
+          })
+          .then(parse)
+          .catch(fail);
+      else fail(new Error('fichier vide'));
+    } catch (e) {
+      fail(e);
+    }
+  }
+  if (rec.ready) onReady && onReady(rec.gltf);
+  else if (rec.failed) onFail && onFail(rec.error);
+  else {
+    if (onReady) rec.waiters.push(onReady);
+    if (onFail) rec.failers.push(onFail);
+  }
+  return rec;
+}
+
+/** Promesse résolue avec le modèle chargé (null s'il est illisible) */
+export function modelReady(asset) {
+  return new Promise((resolve) => loadModel(asset, resolve, () => resolve(null)));
+}
+
+/** Copie du projet où les modèles intégrés sont inclus dans le fichier (pour l'export du jeu) */
+export async function embedBuiltinModels(project) {
+  if (!(project.assets || []).some((a) => a.kind === 'model' && !a.data && a.builtin)) return project;
+  const p = JSON.parse(JSON.stringify(project));
+  for (const a of p.assets) {
+    if (a.kind !== 'model' || a.data || !a.builtin) continue;
+    const r = await fetch(builtinModelUrl(a.builtin));
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const buf = new Uint8Array(await r.arrayBuffer());
+    let bin = '';
+    for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+    a.data = 'data:model/gltf-binary;base64,' + btoa(bin);
+  }
+  return p;
+}
+
+export function findClip(clips, name) {
+  if (!clips || !name) return null;
+  const n = String(name).toLowerCase();
+  return clips.find((c) => c.name === name) || clips.find((c) => c.name.toLowerCase() === n) || null;
+}
+
+/** Dans l'éditeur : pose le modèle sur la première image de son animation de départ */
+function posePreview(root, clips, name) {
+  const clip = findClip(clips, name) || findClip(clips, 'Repos') || findClip(clips, 'Idle') || clips[0];
+  if (!clip) return;
+  const mixer = new THREE.AnimationMixer(root);
+  mixer.clipAction(clip).play();
+  mixer.update(0);
+}
+
+// petite caméra de 10 cm affichée dans la vue Scène (à la place d'une icône)
+let camGizmoParts = null;
+function makeCameraGizmo() {
+  if (!camGizmoParts) {
+    const mat = (c, r = 0.5, m = 0.25) => {
+      const x = new THREE.MeshStandardMaterial({ color: c, roughness: r, metalness: m });
+      x.userData.shared = true;
+      return x;
+    };
+    const geo = (g) => {
+      g.userData.shared = true;
+      return g;
+    };
+    const body = mat('#3d4452');
+    const dark = mat('#14161b', 0.3, 0.4);
+    const reel = mat('#6b7384');
+    const glass = mat('#5fa8ff', 0.1, 0.6);
+    camGizmoParts = [
+      [geo(new THREE.BoxGeometry(0.046, 0.05, 0.068)), body, [0, 0, 0.004], [0, 0, 0]],
+      [geo(new THREE.CylinderGeometry(0.017, 0.021, 0.03, 18)), dark, [0, 0, -0.044], [Math.PI / 2, 0, 0]],
+      [geo(new THREE.CylinderGeometry(0.012, 0.012, 0.004, 18)), glass, [0, 0, -0.06], [Math.PI / 2, 0, 0]],
+      [geo(new THREE.CylinderGeometry(0.02, 0.02, 0.012, 20)), reel, [0, 0.045, -0.014], [0, 0, Math.PI / 2]],
+      [geo(new THREE.CylinderGeometry(0.02, 0.02, 0.012, 20)), reel, [0, 0.045, 0.026], [0, 0, Math.PI / 2]],
+    ];
+  }
+  const g = new THREE.Group();
+  for (const [geometry, material, p, r] of camGizmoParts) {
+    const m = new THREE.Mesh(geometry, material);
+    m.position.set(p[0], p[1], p[2]);
+    m.rotation.set(r[0], r[1], r[2]);
+    m.castShadow = false;
+    m.layers.set(ICON_LAYER);
+    m.userData.isIcon = true;
+    g.add(m);
+  }
+  g.layers.set(ICON_LAYER);
+  return g;
+}
 
 export class TextureCache {
   constructor(project, onLoad) {
@@ -473,7 +637,47 @@ export function buildVisuals(group, go, ctx) {
       case 'Camera': {
         const cam = makeCamera(c);
         refs.camera = add(cam, c);
-        if (ctx.mode === 'editor') add(makeIcon('🎥'));
+        if (ctx.mode === 'editor') add(makeCameraGizmo());
+        break;
+      }
+      case 'ModelRenderer': {
+        const holder = new THREE.Group();
+        const k = c.scale ?? 1;
+        holder.scale.set(k, k, k);
+        refs.model = add(holder, c);
+        hasVisible = true;
+        const asset = ctx.textures && ctx.textures.findAsset(c.model);
+        if (!asset) {
+          if (ctx.mode === 'editor') add(makeIcon('🧍'));
+          break;
+        }
+        const animComp = go.c.find((x) => x.type === 'Animator');
+        const fill = (gltf) => {
+          if (holder.userData.root) return;
+          const inst = cloneSkinned(gltf.scene);
+          inst.traverse((o) => {
+            o.userData.goId = go.id;
+            if (o.isMesh) {
+              o.castShadow = c.castShadows !== false;
+              o.receiveShadow = c.receiveShadows !== false;
+              // les membres animés peuvent sortir de la boîte de départ
+              if (o.isSkinnedMesh) o.frustumCulled = false;
+            }
+          });
+          holder.add(inst);
+          holder.userData.root = inst;
+          holder.userData.clips = gltf.animations || [];
+          if (ctx.mode === 'editor' && animComp) posePreview(inst, holder.userData.clips, animComp.clip);
+          if (holder.userData.onReady) holder.userData.onReady();
+        };
+        loadModel(
+          asset,
+          (g) => {
+            fill(g);
+            if (ctx.textures.onLoad) ctx.textures.onLoad();
+          },
+          () => ctx.mode === 'editor' && holder.add(makeIcon('⚠️'))
+        );
         break;
       }
       case 'ParticleSystem':
@@ -495,6 +699,7 @@ export function disposeObject(o) {
     if (x.material) {
       const mats = Array.isArray(x.material) ? x.material : [x.material];
       for (const m of mats) {
+        if (m.userData && m.userData.shared) continue;
         if (m.map && m.map.userData.owned) m.map.dispose();
         m.dispose();
       }

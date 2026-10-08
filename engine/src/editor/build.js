@@ -2,6 +2,7 @@
 
 import { h, modal, toast, downloadFile, escapeHtml, promptText } from '../util.js';
 import { runPlayer } from '../player-core.js';
+import { embedBuiltinModels } from '../builder.js';
 import { boolField, selectField, textField, vecField, row } from './fields.js';
 
 const fileSafe = (s) => String(s).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\w-]+/g, '_').replace(/^_+|_+$/g, '') || 'jeu';
@@ -15,6 +16,12 @@ export async function exportGameHTML(project) {
     js = await res.text();
   } catch (e) {
     toast('Impossible de lire le moteur (dist/player.js) : ' + e.message, 'error', 4000);
+    return;
+  }
+  try {
+    project = await embedBuiltinModels(project);
+  } catch (e) {
+    toast('Impossible de lire un modèle 3D fourni : ' + e.message, 'error', 4000);
     return;
   }
   const LS = String.fromCharCode(0x2028), PS = String.fromCharCode(0x2029);

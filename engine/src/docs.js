@@ -213,6 +213,11 @@ const raw = {
     m: ['Play|m|Play()|Joue le son', 'Stop|m|Stop()|Arrête', 'PlayOneShot|m|PlayOneShot("sfx:coin", volume)|Joue un son en plus', 'isPlaying|p|isPlaying|En cours', 'clip|p|clip|Son ("sfx:coin" ou nom importé)', 'volume|p|volume|Volume (0-1)', 'pitch|p|pitch|Hauteur', 'loop|p|loop|Boucle'],
   },
   Audio: { desc: 'Raccourcis audio.', m: ['Play|s|Audio.Play("coin", volume, pitch)|Joue un effet ou un son importé', 'StopAll|s|Audio.StopAll()|Coupe tout', 'mute|s|Audio.mute|Muet'] },
+  Animator: {
+    desc: 'Joue les animations d\'un Modèle 3D (.glb) : this.GetComponentInChildren("Animator"). Héros fourni : Repos, Marche, Course, Saut, Chute, Danse, Salut.',
+    m: ['Play|m|Play("Marche")|Joue une animation (en boucle)', 'CrossFade|m|CrossFade("Course", 0.2)|Passe en douceur à une animation (fondu en s)', 'Play|m|Play("Saut", 0.1, false)|Une seule fois (reste sur la dernière image)', 'Stop|m|Stop()|Arrête', 'IsPlaying|m|IsPlaying("Danse")|Cette animation est-elle jouée ?', 'current|p|current|Nom de l\'animation en cours', 'clips|p|clips|Liste des animations du modèle', 'speed|p|speed|Vitesse (1 = normale)', 'normalizedTime|p|normalizedTime|Avancement 0-1'],
+  },
+  ModelRenderer: { desc: 'Modèle 3D importé (.glb de Blender).', m: ['model|p|model|Nom du modèle', 'scale|p|scale|Taille', 'clips|p|clips|Animations du modèle', 'isLoaded|p|isLoaded|Modèle chargé'] },
   ParticleSystem: { desc: 'Particules.', m: ['Play|m|Play()|Démarre', 'Stop|m|Stop()|Arrête d\'émettre', 'Emit|m|Emit(n)|Émet n particules', 'Clear|m|Clear()|Efface', 'isPlaying|p|isPlaying|En cours', 'rate|p|rate|Particules par seconde', 'startColor|p|startColor|Couleur de départ', 'endColor|p|endColor|Couleur finale', 'speed|p|speed|Vitesse'] },
   Text: { desc: 'UI Text : this.GetComponent("Text")', m: ['text|p|text|Texte affiché', 'color|p|color|Couleur', 'fontSize|p|fontSize|Taille', 'enabled|p|enabled|Visible'] },
   Button: { desc: 'UI Button', m: ['onClick|p|onClick|onClick.AddListener(() => …)', 'text|p|text|Libellé', 'interactable|p|interactable|Cliquable'] },
@@ -273,6 +278,18 @@ export const SNIPPETS = [
 ];
 
 export const TUTORIALS = [
+  {
+    title: 'Un héros modélisé dans Blender',
+    icon: '🧑‍🎤',
+    steps: [
+      'Touche ＋ → « Personnages animés » → « Héros 3D (modèle Blender) ». Le modèle Blender, ses scripts et la caméra arrivent ensemble.',
+      'Appuie sur ▶ : il marche, court, saute et tombe tout seul selon ses mouvements. Le bouton B le fait danser.',
+      'Ses animations sont dans le composant Animator (objet « Modèle ») : choisis l\'animation de départ dans l\'Inspecteur.',
+      'Dans un script : const anim = this.GetComponentInChildren("Animator"); anim.CrossFade("Salut", 0.2);',
+      'Ton propre modèle : dans Blender, Fichier → Exporter → glTF 2.0, format « glTF binaire (.glb) », avec l\'armature et les animations (une action par animation).',
+      'Puis Projet → 📥 Importer → ton fichier .glb, et touche-le pour le placer dans la scène.',
+    ],
+  },
   {
     title: 'Faire un perso qui bouge',
     icon: '🏃',

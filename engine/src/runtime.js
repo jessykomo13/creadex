@@ -6,7 +6,7 @@ import {
   WaitForSeconds, WaitForSecondsRealtime, WaitUntil, WaitWhile, WaitForFixedUpdate, WaitForEndOfFrame,
   KeyCode, ForceMode, Space, TouchPhase, RuntimeRef,
 } from './api.js';
-import { buildVisuals, applyEnvironment, applyTransform, TextureCache, fitCamera, getGeometry, sortByHierarchy, disposeObject } from './builder.js';
+import { buildVisuals, applyEnvironment, applyTransform, TextureCache, fitCamera, getGeometry, sortByHierarchy, disposeObject, findClip } from './builder.js';
 import { PhysicsWorld } from './physics.js';
 import { InputSystem } from './input.js';
 import { AudioSystem } from './audio.js';
@@ -247,7 +247,7 @@ function matchType(c, type) {
   const dt = c._data && c._data.type;
   if (dt === t) return true;
   if (t === 'Collider') return COLLIDERS.includes(dt);
-  if (t === 'Renderer') return dt === 'MeshRenderer' || dt === 'SpriteRenderer' || dt === 'Text3D';
+  if (t === 'Renderer') return dt === 'MeshRenderer' || dt === 'SpriteRenderer' || dt === 'Text3D' || dt === 'ModelRenderer';
   if (c instanceof MonoBehaviour) return c.constructor.__scriptName === t || c.constructor.name === t || t === 'MonoBehaviour' || t === 'Script';
   return false;
 }
@@ -528,6 +528,108 @@ function lightMul(d) {
   if (d.kind === 'Hemisphere') return 1.5;
   return Math.max(1, ((d.range || 0) * (d.range || 0)) / 4);
 }
+export class ModelRenderer extends Component {
+  get _holder() { const r = this.gameObject.obj.userData.refs; return r && r.model; }
+  get model() { return this._data.model; }
+  set model(v) { this._data.model = v || ''; needRT().rebuildVisuals(this.gameObject); }
+  get scale() { return this._data.scale ?? 1; }
+  set scale(v) { this._data.scale = v; const h = this._holder; if (h) h.scale.set(v, v, v); }
+  get isLoaded() { const h = this._holder; return !!(h && h.userData.root); }
+  get clips() { const h = this._holder; return h && h.userData.clips ? h.userData.clips.map((c) => c.name) : []; }
+}
+
+/** Joue les animations d'un Modèle 3D (sur le même objet) */
+export class Animator extends Component {
+  _attach() {
+    const rt = needRT();
+    if (!rt.animators.includes(this)) rt.animators.push(this);
+    this._speed = this._data.speed ?? 1;
+    this._attached = true;
+    this._bind();
+  }
+  _bind() {
+    if (this._mixer) this._mixer.stopAllAction();
+    this._mixer = null;
+    this._actions = new Map();
+    this._cur = null;
+    this._curName = '';
+    const r = this.gameObject.obj.userData.refs;
+    const holder = r && r.model;
+    if (!holder) return;
+    if (!holder.userData.root) {
+      // le modèle se charge encore
+      holder.userData.onReady = () => this._bind();
+      return;
+    }
+    this._clips = holder.userData.clips || [];
+    this._mixer = new THREE.AnimationMixer(holder.userData.root);
+    const p = this._pending;
+    this._pending = null;
+    if (p) this.Play(p.name, 0, p.loop);
+    else if (this._data.playOnStart !== false && this._clips.length) this.Play(this._data.clip || this._clips[0].name, 0);
+  }
+  /** Joue une animation : fondu en secondes, boucle ou une seule fois */
+  Play(name, fade = 0, loop = true) {
+    if (!this._mixer) {
+      this._pending = { name, loop };
+      return;
+    }
+    const clip = findClip(this._clips, name);
+    if (!clip) {
+      this._warned = this._warned || new Set();
+      if (!this._warned.has(name)) {
+        this._warned.add(name);
+        needRT().warn(`Animator : animation « ${name} » introuvable. Animations : ${this.clips.join(', ') || 'aucune'}`);
+      }
+      return;
+    }
+    let a = this._actions.get(clip.name);
+    if (!a) {
+      a = this._mixer.clipAction(clip);
+      this._actions.set(clip.name, a);
+    }
+    if (this._cur === a && a.isRunning()) return;
+    const prev = this._cur;
+    a.reset();
+    a.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
+    a.clampWhenFinished = !loop;
+    a.setEffectiveTimeScale(1);
+    a.setEffectiveWeight(1);
+    a.play();
+    if (prev && prev !== a) {
+      if (fade > 0) prev.crossFadeTo(a, fade, false);
+      else prev.stop();
+    } else if (fade > 0) a.fadeIn(fade);
+    this._cur = a;
+    this._curName = clip.name;
+  }
+  CrossFade(name, duration = 0.25, loop = true) { this.Play(name, duration, loop); }
+  Stop() {
+    if (this._mixer) this._mixer.stopAllAction();
+    this._cur = null;
+    this._curName = '';
+  }
+  IsPlaying(name) {
+    if (!this._cur || !this._cur.isRunning()) return false;
+    return name === undefined || (findClip(this._clips, name) || {}).name === this._curName;
+  }
+  get current() { return this._curName; }
+  get clips() { return (this._clips || []).map((c) => c.name); }
+  get isLoaded() { return !!this._mixer; }
+  get speed() { return this._speed; }
+  set speed(v) { this._speed = v; }
+  get normalizedTime() { const a = this._cur; return a ? a.time / a.getClip().duration : 0; }
+  _update(dt) {
+    if (this._mixer && this.enabled && this.gameObject.activeInHierarchy) this._mixer.update(dt * this._speed);
+  }
+  _destroy() {
+    const rt = RT;
+    if (this._mixer) this._mixer.stopAllAction();
+    this._mixer = null;
+    if (rt) rt.animators = rt.animators.filter((a) => a !== this);
+  }
+}
+
 export class Light extends Component {
   get _light() { return this.gameObject.obj.userData.refs && this.gameObject.obj.userData.refs.light; }
   get intensity() { return this._data.intensity; }
@@ -877,11 +979,11 @@ export class Image extends UIComp {
 }
 
 const BUILTIN = {
-  MeshRenderer, SpriteRenderer, Text3D, Light, Camera, Rigidbody,
+  MeshRenderer, SpriteRenderer, Text3D, ModelRenderer, Animator, Light, Camera, Rigidbody,
   BoxCollider, SphereCollider, CapsuleCollider, CylinderCollider,
   AudioSource, ParticleSystem, TrailRenderer, UIText: Text, UIButton: Button, UIImage: Image,
 };
-const VISUAL_TYPES = new Set(['MeshRenderer', 'SpriteRenderer', 'Text3D', 'Light', 'Camera']);
+const VISUAL_TYPES = new Set(['MeshRenderer', 'SpriteRenderer', 'Text3D', 'ModelRenderer', 'Light', 'Camera']);
 const PHYS_TYPES = new Set(['Rigidbody', ...COLLIDERS]);
 
 export class PrefabRef {
@@ -936,6 +1038,7 @@ export class Runtime {
     this.behaviours = [];
     this.toStart = [];
     this.emitters = [];
+    this.animators = [];
     this.trails = [];
     this.coroutines = [];
     this.invokes = [];
@@ -1281,6 +1384,7 @@ export class Runtime {
   rebuildVisuals(go) {
     const comps = go.components.map((c) => c._data).filter((d) => d && d.type !== 'Script');
     buildVisuals(go.obj, { id: go.id, c: comps }, this.ctx);
+    for (const c of go.components) if (c instanceof Animator && c._attached) c._bind();
   }
 
   // ------------------------------------------------------------ opérations
@@ -1700,6 +1804,7 @@ export class Runtime {
     }
     this.runInvokes();
     this.runCoroutines();
+    for (const a of this.animators) a._update(dt);
     for (const b of this.behaviours) {
       if (b._started && b.enabled && typeof b.LateUpdate === 'function' && b.gameObject.activeInHierarchy) this.safeCall(b, 'LateUpdate');
     }

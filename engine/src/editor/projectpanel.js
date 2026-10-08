@@ -22,7 +22,8 @@ export class ProjectPanel {
   }
 
   async importFiles() {
-    const files = await pickFiles('image/*,audio/*,.mp3,.wav,.ogg,.m4a,.js,.txt', true);
+    // aucun filtre : sur iPhone, un filtre grise les fichiers .glb
+    const files = await pickFiles('', true);
     let n = 0;
     for (const f of files) if (await this.ed.importAsset(f)) n++;
     if (n) toast(`${n} fichier(s) importé(s)`, 'ok');
@@ -177,6 +178,17 @@ export class ProjectPanel {
       })
     );
     this.body.appendChild(this.section('sounds', '🔊', 'Sons', sounds, 'Importe des sons (mp3, wav, m4a…).'));
+
+    const models = p.assets.filter((a) => a.kind === 'model').map((a) =>
+      this.tile({
+        icon: a.builtin ? '🧑‍🎤' : '🧍',
+        name: a.name,
+        sub: a.builtin ? 'fourni' : Math.round((a.data.length * 0.75) / 1024) + ' Ko',
+        onTap: () => actionSheet(a.name, this.modelMenu(a)),
+        menu: () => this.modelMenu(a),
+      })
+    );
+    this.body.appendChild(this.section('models', '🧍', 'Modèles 3D', models, 'Importe des modèles .glb (exportés de Blender, avec leurs animations).'));
   }
 
   imageMenu(a) {
@@ -196,6 +208,25 @@ export class ProjectPanel {
         ed.inspector.render();
       } },
       { label: 'Créer un sprite', icon: '🖼️', onClick: () => ed.createSpriteFromImage(a) },
+      { label: 'Renommer', icon: '🏷️', onClick: () => this.renameAsset(a) },
+      '-',
+      { label: 'Supprimer', icon: '🗑️', danger: true, onClick: () => this.deleteAsset(a) },
+    ];
+  }
+
+  modelMenu(a) {
+    const ed = this.ed;
+    return [
+      { label: 'Placer dans la scène', icon: '📍', onClick: () => ed.createModelObject(a) },
+      { label: 'Appliquer à la sélection', icon: '🧍', disabled: !ed.selection, onClick: () => {
+        const go = ed.getGO(ed.selection);
+        const mr = go.c.find((c) => c.type === 'ModelRenderer');
+        if (mr) mr.model = a.id;
+        else go.c.push(createComponent('ModelRenderer', go, { model: a.id }));
+        ed.updateGO(go, { hierarchy: true });
+        ed.commit('Modèle');
+        ed.inspector.render();
+      } },
       { label: 'Renommer', icon: '🏷️', onClick: () => this.renameAsset(a) },
       '-',
       { label: 'Supprimer', icon: '🗑️', danger: true, onClick: () => this.deleteAsset(a) },
