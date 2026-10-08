@@ -986,6 +986,7 @@ export class Editor {
       { header: 'Fenêtre' },
       { label: 'Éditeur de code', icon: '</>', onClick: () => this.openCodeEditor() },
       { label: 'Statistiques de rendu', icon: '📊', checked: p.get('showStats'), sub: p.get('showStats') ? 'activé' : '', onClick: () => { p.set('showStats', !p.get('showStats')); this.statsEl.classList.toggle('hidden', !p.get('showStats')); } },
+      { label: 'Champ de vision des caméras', icon: '📐', checked: p.get('camFrustum') !== false, sub: p.get('camFrustum') !== false ? 'toujours visible' : 'masqué', onClick: () => { p.set('camFrustum', p.get('camFrustum') === false); this.sv.requestRender(); } },
       { label: 'Plein écran en jeu', icon: '⛶', checked: p.get('maximizeOnPlay'), sub: p.get('maximizeOnPlay') ? 'activé' : '', onClick: () => p.set('maximizeOnPlay', !p.get('maximizeOnPlay')) },
       { label: 'Sauvegarde automatique', icon: '⏱️', checked: p.get('autosave') !== false, sub: p.get('autosave') !== false ? 'activée' : 'désactivée', onClick: () => p.set('autosave', p.get('autosave') === false) },
       '-',

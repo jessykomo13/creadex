@@ -3,6 +3,15 @@
 
 export const CHANGELOG = [
   {
+    version: '1.2.2',
+    notes: [
+      'Le champ de vision des caméras est toujours visible dans la vue Scène (lignes blanches, en jaune si la caméra est sélectionnée), même pendant le jeu',
+      'Toucher une ligne du champ de vision sélectionne la caméra',
+      'L’aperçu caméra se déplace : fais-le glisser où tu veux (il garde sa place)',
+      'Menu ☰ → Champ de vision des caméras pour les masquer',
+    ],
+  },
+  {
     version: '1.2.1',
     notes: [
       'Aperçu caméra : dans la vue Scène, une petite fenêtre montre en direct ce que voit la caméra (même pendant le jeu)',

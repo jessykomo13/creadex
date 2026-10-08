@@ -2,11 +2,15 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { buildVisuals, applyTransform, readTransform, applyEnvironment, TextureCache, fitCamera, sortByHierarchy, disposeObject, ICON_LAYER } from '../builder.js';
 import { UILayer } from '../uilayer.js';
 import { h, toast } from '../util.js';
 import { Prefs } from '../storage.js';
+import { Camera } from '../runtime.js';
 
 const D2R = Math.PI / 180;
 
@@ -38,6 +42,86 @@ function makeGrid(is2D) {
   }
   g.traverse((o) => o.layers.set(ICON_LAYER));
   return g;
+}
+
+// ---------------------------------------------------------------- champ de vision des caméras
+const FRUSTUM_COLOR = 0xffffff;
+const FRUSTUM_SELECTED = 0xffc23d;
+const _fp = new THREE.Vector3();
+const _fq = new THREE.Quaternion();
+const _fs = new THREE.Vector3();
+const ONE = new THREE.Vector3(1, 1, 1);
+
+// traits épais (les lignes WebGL font 1 pixel, invisibles sur iPhone) :
+// contour sombre + trait clair devant les objets, trait léger à travers les objets
+function makeFrustumLines() {
+  const mat = (color, linewidth, opacity, depthTest) => new LineMaterial({ color, linewidth, opacity, transparent: true, depthTest, depthWrite: false });
+  const outline = new LineSegments2(new LineSegmentsGeometry(), mat(0x000000, 4.5, 0.35, true));
+  const solid = new LineSegments2(outline.geometry, mat(FRUSTUM_COLOR, 2.2, 0.95, true));
+  const faint = new LineSegments2(outline.geometry, mat(FRUSTUM_COLOR, 1.6, 0.3, false));
+  const lines = [faint, outline, solid];
+  lines.forEach((l, i) => {
+    l.layers.set(ICON_LAYER);
+    l.frustumCulled = false;
+    l.matrixAutoUpdate = false;
+    l.renderOrder = 994 + i;
+  });
+  return { lines, solid, local: new Float32Array(0), count: 0, key: '' };
+}
+
+/** Lignes du champ de vision (repère local de la caméra, échelle ignorée) */
+function setFrustum(f, cam, comp, aspect, selected, w, h) {
+  const c = cam.userData.comp || comp || {};
+  const near = Math.max(0.01, c.near ?? 0.1);
+  const far = Math.max(near + 0.1, Math.min(c.far ?? 1000, 30));
+  const ortho = !!cam.isOrthographicCamera;
+  const fov = cam.fov || c.fov || 60;
+  const key = [ortho, fov, c.orthoSize, near, far, aspect.toFixed(4)].join('|');
+  if (key !== f.key) {
+    f.key = key;
+    const pts = [];
+    const seg = (a, b) => pts.push(...a, ...b);
+    const rect = (hw, hh, z) => {
+      const q = [[-hw, -hh, z], [hw, -hh, z], [hw, hh, z], [-hw, hh, z]];
+      for (let i = 0; i < 4; i++) seg(q[i], q[(i + 1) % 4]);
+      return q;
+    };
+    if (ortho) {
+      const hh = c.orthoSize || 5;
+      const a = rect(hh * aspect, hh, -near);
+      const b = rect(hh * aspect, hh, -far);
+      for (let i = 0; i < 4; i++) seg(a[i], b[i]);
+    } else {
+      const hh = Math.tan((fov * Math.PI) / 360) * far;
+      const b = rect(hh * aspect, hh, -far);
+      for (let i = 0; i < 4; i++) seg([0, 0, 0], b[i]);
+    }
+    f.local = new Float32Array(pts);
+    f.count = pts.length / 3;
+    const old = f.solid.geometry;
+    const geo = new LineSegmentsGeometry().setPositions(f.local);
+    for (const l of f.lines) l.geometry = geo;
+    old.dispose();
+  }
+  cam.updateWorldMatrix(true, false);
+  cam.matrixWorld.decompose(_fp, _fq, _fs);
+  for (const l of f.lines) {
+    l.matrix.compose(_fp, _fq, ONE);
+    l.matrixWorldNeedsUpdate = true;
+    l.material.resolution.set(w, h);
+  }
+  f.lines[0].material.color.setHex(selected ? FRUSTUM_SELECTED : FRUSTUM_COLOR);
+  f.solid.material.color.setHex(selected ? FRUSTUM_SELECTED : FRUSTUM_COLOR);
+}
+
+function disposeFrustum(f) {
+  f.solid.geometry.dispose();
+  for (const l of f.lines) l.material.dispose();
+}
+
+function shownInScene(o) {
+  for (; o; o = o.parent) if (!o.visible) return false;
+  return true;
 }
 
 export class SceneView {
@@ -108,11 +192,8 @@ export class SceneView {
     this.selBox.layers.set(ICON_LAYER);
     this.selBox.visible = false;
     this.helpers.add(this.selBox);
-    this.camProxy = new THREE.PerspectiveCamera();
-    this.camHelper = new THREE.CameraHelper(this.camProxy);
-    this.camHelper.layers.set(ICON_LAYER);
-    this.camHelper.visible = false;
-    this.helpers.add(this.camHelper);
+    this.frusta = new THREE.Group();
+    this.helpers.add(this.frusta);
     this.arrow = new THREE.ArrowHelper(new THREE.Vector3(0, 0, -1), new THREE.Vector3(), 2, 0xffe066, 0.4, 0.25);
     this.arrow.traverse((o) => o.layers.set(ICON_LAYER));
     this.arrow.visible = false;
@@ -131,7 +212,7 @@ export class SceneView {
     this.raycaster.layers.enableAll();
     this.needsRender = true;
     this.uiPreview = null;
-    this.pip = { on: Prefs.get('camPreview') !== false, big: !!Prefs.get('camPreviewBig'), key: '' };
+    this.pip = { on: Prefs.get('camPreview') !== false, big: !!Prefs.get('camPreviewBig'), fx: Prefs.get('camPreviewX') ?? 1, fy: Prefs.get('camPreviewY') ?? 1, key: '' };
     this.buildPip();
 
     this.setMode2D(this.is2D, true);
@@ -284,7 +365,6 @@ export class SceneView {
     const id = this.ed.selection;
     const e = id && this.goMap.get(id);
     this.selBox.visible = false;
-    this.camHelper.visible = false;
     this.arrow.visible = false;
     this.colBox.clear();
     if (e) {
@@ -294,33 +374,6 @@ export class SceneView {
         this.selBox.visible = true;
       }
       const go = this.ed.getGO(id);
-      const cam = go && go.c.find((c) => c.type === 'Camera');
-      if (cam && e.group.userData.refs.camera) {
-        const src = e.group.userData.refs.camera;
-        const [w, h] = this.viewSize();
-        const proxy = cam.ortho ? new THREE.OrthographicCamera() : new THREE.PerspectiveCamera();
-        proxy.userData.comp = cam;
-        if (!cam.ortho) {
-          proxy.fov = cam.fov;
-          proxy.near = Math.max(0.1, cam.near);
-          proxy.far = Math.min(cam.far, 30);
-        } else {
-          proxy.near = 0.1;
-          proxy.far = Math.min(cam.far, 30);
-        }
-        fitCamera(proxy, w / Math.max(1, h));
-        src.updateWorldMatrix(true, false);
-        proxy.matrixWorld.copy(src.matrixWorld);
-        proxy.matrixWorld.decompose(proxy.position, proxy.quaternion, proxy.scale);
-        this.helpers.remove(this.camHelper);
-        this.camHelper.dispose();
-        this.camProxy = proxy;
-        this.camHelper = new THREE.CameraHelper(proxy);
-        this.camHelper.layers.set(ICON_LAYER);
-        this.helpers.add(this.camHelper);
-        this.camHelper.update();
-        this.camHelper.visible = true;
-      }
       const light = go && go.c.find((c) => c.type === 'Light' && (c.kind === 'Directional' || c.kind === 'Spot'));
       if (light) {
         e.group.updateWorldMatrix(true, false);
@@ -423,11 +476,100 @@ export class SceneView {
     const hits = this.raycaster.intersectObjects(targets, true);
     // les icônes ont la priorité
     const icon = hits.find((hh) => hh.object.userData.isIcon);
-    const hit = icon || hits.find((hh) => hh.object.isMesh && hh.object.visible);
+    const mesh = hits.find((hh) => hh.object.isMesh && hh.object.visible);
+    if (!icon) {
+      const cam = this.pickFrustum(cx - r.left, cy - r.top, r.width, r.height, mesh ? mesh.distance : Infinity);
+      if (cam) return cam;
+    }
+    const hit = icon || mesh;
     if (!hit) return null;
     let o = hit.object;
     while (o && !o.userData.goId) o = o.parent;
     return o ? o.userData.goId : null;
+  }
+
+  /** Caméra dont une ligne du champ de vision passe sous le doigt (px CSS) */
+  pickFrustum(px, py, W, H, maxDist) {
+    const map = this.frusta.userData.map;
+    if (!map || !this.frusta.visible) return null;
+    const cam = this.camera;
+    cam.updateMatrixWorld();
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), va = new THREE.Vector3(), vb = new THREE.Vector3();
+    const toScreen = (v) => {
+      const p = v.clone().project(cam);
+      return [((p.x + 1) / 2) * W, ((1 - p.y) / 2) * H];
+    };
+    let best = null;
+    let bestD = 10;
+    for (const [id, f] of map) {
+      const arr = f.local;
+      const m = f.solid.matrixWorld;
+      for (let i = 0; i < f.count; i += 2) {
+        a.fromArray(arr, i * 3).applyMatrix4(m);
+        b.fromArray(arr, i * 3 + 3).applyMatrix4(m);
+        va.copy(a).applyMatrix4(cam.matrixWorldInverse);
+        vb.copy(b).applyMatrix4(cam.matrixWorldInverse);
+        if (!cam.isOrthographicCamera && (va.z > -cam.near || vb.z > -cam.near)) continue;
+        const [ax, ay] = toScreen(a);
+        const [bx, by] = toScreen(b);
+        const dx = bx - ax, dy = by - ay;
+        const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy || 1)));
+        const d = Math.hypot(ax + t * dx - px, ay + t * dy - py);
+        if (d >= bestD) continue;
+        const dist = a.clone().lerp(b, t).distanceTo(cam.position);
+        if (!cam.isOrthographicCamera && dist > maxDist) continue;
+        bestD = d;
+        best = id;
+      }
+    }
+    return best;
+  }
+
+  /** Met à jour les lignes : items = [{ id, cam, comp, selected }] */
+  updateFrusta(group, items, w, h) {
+    const map = group.userData.map || (group.userData.map = new Map());
+    const seen = new Set();
+    for (const it of items) {
+      seen.add(it.id);
+      let f = map.get(it.id);
+      if (!f) {
+        f = makeFrustumLines();
+        map.set(it.id, f);
+        group.add(...f.lines);
+      }
+      setFrustum(f, it.cam, it.comp, w / h, it.selected, w, h);
+    }
+    for (const [id, f] of map) {
+      if (seen.has(id)) continue;
+      group.remove(...f.lines);
+      disposeFrustum(f);
+      map.delete(id);
+    }
+  }
+
+  editorFrustumItems() {
+    const items = [];
+    if (Prefs.get('camFrustum') === false) return items;
+    for (const go of this.ed.scene.objects) {
+      const comp = go.c.find((c) => c.type === 'Camera');
+      if (!comp) continue;
+      const e = this.goMap.get(go.id);
+      const cam = e && e.group.userData.refs && e.group.userData.refs.camera;
+      const selected = go.id === this.ed.selection;
+      if (!cam || (!selected && (comp.enabled === false || !shownInScene(e.group)))) continue;
+      items.push({ id: go.id, cam, comp, selected });
+    }
+    return items;
+  }
+
+  playFrustumItems(rt) {
+    const items = [];
+    if (Prefs.get('camFrustum') === false) return items;
+    for (const go of rt.objects) {
+      if (go._destroyed || !go.activeInHierarchy) continue;
+      for (const c of go.components) if (c instanceof Camera && c.enabled && c._cam) items.push({ id: c, cam: c._cam, comp: c._data, selected: false });
+    }
+    return items;
   }
 
   focus(id) {
@@ -523,6 +665,7 @@ export class SceneView {
       this.scene.background = bg;
       this.helpers.visible = true;
     } else {
+      this.updateFrusta(this.frusta, this.editorFrustumItems(), w, h);
       this.renderer.render(this.scene, this.camera);
     }
     this.renderPip(this.scene, w, h);
@@ -539,7 +682,10 @@ export class SceneView {
       if (!this.playGrid) {
         this.playGrid = makeGrid(this.is2D);
         rt.scene.add(this.playGrid);
+        this.playFrusta = new THREE.Group();
+        rt.scene.add(this.playFrusta);
       }
+      this.updateFrusta(this.playFrusta, this.playFrustumItems(rt), w, h);
       const cam = this.camera;
       rt.scene.background = rt.scene.userData.envBackground || null;
       rt.prepareRender(cam, h * this.renderer.getPixelRatio());
@@ -574,10 +720,52 @@ export class SceneView {
     this.pipEl = h(
       'div.cam-pip.hidden',
       h('div.pip-bar', this.pipLabel, btn('📍', 'Placer la caméra comme la vue', () => this.alignCameraToView(), '.pip-align'), this.pipBigBtn, btn('✕', 'Masquer l’aperçu', () => this.setPip(false))),
-      h('div.pip-hit', { title: 'Ouvrir la vue Jeu', onclick: () => this.ed.setViewMode('game') }),
+      h('div.pip-hit', { title: 'Glisser pour déplacer, toucher pour ouvrir la vue Jeu' }),
       h('button.pip-open', { type: 'button', title: 'Afficher l’aperçu de la caméra', onclick: () => this.setPip(true) }, '🎥')
     );
     this.host.appendChild(this.pipEl);
+    this.bindPipDrag();
+  }
+
+  /** Glisser l'aperçu (barre ou image) pour le déplacer ; un simple toucher sur l'image ouvre la vue Jeu */
+  bindPipDrag() {
+    const el = this.pipEl;
+    let drag = null;
+    el.addEventListener('pointerdown', (e) => {
+      if (drag || el.classList.contains('mini') || e.target.closest('button')) return;
+      drag = { id: e.pointerId, x: e.clientX, y: e.clientY, fx: this.pip.fx, fy: this.pip.fy, onImage: !!e.target.closest('.pip-hit'), moved: false };
+      try {
+        el.setPointerCapture(e.pointerId);
+      } catch {}
+      e.preventDefault();
+    });
+    el.addEventListener('pointermove', (e) => {
+      if (!drag || e.pointerId !== drag.id) return;
+      const dx = e.clientX - drag.x;
+      const dy = e.clientY - drag.y;
+      if (!drag.moved && Math.hypot(dx, dy) < 6) return;
+      drag.moved = true;
+      el.classList.add('dragging');
+      const [w, h] = this.viewSize();
+      const r = this.pipRect(w, h);
+      const clamp = (v) => Math.max(0, Math.min(1, v));
+      this.pip.fx = clamp(drag.fx + dx / Math.max(1, r.rangeX));
+      this.pip.fy = clamp(drag.fy + dy / Math.max(1, r.rangeY));
+      this.requestRender();
+    });
+    const end = (e) => {
+      if (!drag || e.pointerId !== drag.id) return;
+      const d = drag;
+      drag = null;
+      el.classList.remove('dragging');
+      if (e.type === 'pointercancel') return;
+      if (d.moved) {
+        Prefs.set('camPreviewX', this.pip.fx);
+        Prefs.set('camPreviewY', this.pip.fy);
+      } else if (d.onImage) this.ed.setViewMode('game');
+    };
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
   }
 
   setPip(on) {
@@ -620,7 +808,14 @@ export class SceneView {
     }
     pw = Math.round(pw);
     ph = Math.round(ph);
-    return { x: w - pw - 8, y: 8, w: pw, h: ph };
+    // position choisie en glissant (fractions de l'espace libre ; 1,1 = en bas à droite)
+    const m = 8;
+    const bar = 26;
+    const rangeX = Math.max(0, w - pw - 2 * m);
+    const rangeY = Math.max(0, h - ph - bar - 2 * m);
+    const left = Math.round(m + this.pip.fx * rangeX);
+    const top = Math.round(m + bar + this.pip.fy * rangeY);
+    return { x: left, y: h - top - ph, w: pw, h: ph, left, top, rangeX, rangeY };
   }
 
   renderPip(scene, w, h) {
@@ -628,14 +823,18 @@ export class SceneView {
     const t = this.mode === 'scene' ? this.pipTarget() : null;
     const show = !!t && this.pip.on;
     const r = this.pipRect(w, h);
-    const key = t ? [this.pip.on, t.name, r.w, r.h].join('|') : '';
+    const key = t ? [this.pip.on, t.name, r.w, r.h, r.left, r.top].join('|') : '';
     if (key !== this.pip.key) {
       this.pip.key = key;
       this.pipEl.classList.toggle('hidden', !t);
       this.pipEl.classList.toggle('mini', !!t && !this.pip.on);
       this.pipLabel.textContent = t ? '🎥 ' + t.name : '';
-      this.pipEl.style.width = show ? r.w + 'px' : '';
-      this.pipEl.style.height = show ? r.h + 'px' : '';
+      const st = this.pipEl.style;
+      st.width = show ? r.w + 'px' : '';
+      st.height = show ? r.h + 'px' : '';
+      st.left = show ? r.left + 'px' : '';
+      st.top = show ? r.top + 'px' : '';
+      st.right = st.bottom = show ? 'auto' : '';
     }
     if (!show || r.h < 20) return;
     const R = this.renderer;
@@ -650,6 +849,8 @@ export class SceneView {
     this.helpers.visible = false;
     this.gizmoHelper.visible = false;
     if (this.playGrid) this.playGrid.visible = false;
+    const pf = this.playFrusta && this.playFrusta.visible;
+    if (this.playFrusta) this.playFrusta.visible = false;
     // l'ombre du soleil ne dépend pas de la caméra : on réutilise celle de la vue Scène
     const au = R.shadowMap.autoUpdate;
     R.shadowMap.autoUpdate = false;
@@ -663,6 +864,7 @@ export class SceneView {
     this.helpers.visible = hv;
     this.gizmoHelper.visible = gv;
     if (this.playGrid) this.playGrid.visible = pg;
+    if (this.playFrusta) this.playFrusta.visible = pf;
     scene.background = bg;
   }
 
@@ -745,7 +947,9 @@ export class SceneView {
     this.refreshUIPreview();
   }
   onPlayStop() {
+    if (this.playFrusta) this.updateFrusta(this.playFrusta, [], 1, 1);
     this.playGrid = null;
+    this.playFrusta = null;
     this.updateControls();
     this.attachGizmo();
     this.refreshUIPreview();
