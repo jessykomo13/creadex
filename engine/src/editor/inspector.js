@@ -227,6 +227,8 @@ export class Inspector {
           })
         );
       }
+      if (c.type === 'Camera')
+        body.appendChild(h('button.btn.sm', { onclick: () => ed.sv.alignCameraToView(go.id) }, '📍 Placer comme la vue Scène'));
       if (c.type === 'AudioSource')
         body.appendChild(h('button.btn.sm', { onclick: () => { unlockAudio(); this.sfxPreview.project = ed.project; this.sfxPreview.play(c.clip, { volume: c.volume, pitch: c.pitch }); } }, '▶ Écouter'));
     }

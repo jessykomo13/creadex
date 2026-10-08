@@ -5,6 +5,8 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { buildVisuals, applyTransform, readTransform, applyEnvironment, TextureCache, fitCamera, sortByHierarchy, disposeObject, ICON_LAYER } from '../builder.js';
 import { UILayer } from '../uilayer.js';
+import { h, toast } from '../util.js';
+import { Prefs } from '../storage.js';
 
 const D2R = Math.PI / 180;
 
@@ -129,6 +131,8 @@ export class SceneView {
     this.raycaster.layers.enableAll();
     this.needsRender = true;
     this.uiPreview = null;
+    this.pip = { on: Prefs.get('camPreview') !== false, big: !!Prefs.get('camPreviewBig'), key: '' };
+    this.buildPip();
 
     this.setMode2D(this.is2D, true);
     this.bindPointer();
@@ -495,8 +499,8 @@ export class SceneView {
       const e = this.goMap.get(go.id);
       const cam = e && e.group.userData.refs && e.group.userData.refs.camera;
       if (!cam) continue;
-      if (c.main) return { cam, comp: c };
-      best = best || { cam, comp: c };
+      if (c.main) return { cam, comp: c, go };
+      best = best || { cam, comp: c, go };
     }
     return best;
   }
@@ -521,12 +525,14 @@ export class SceneView {
     } else {
       this.renderer.render(this.scene, this.camera);
     }
+    this.renderPip(this.scene, w, h);
   }
 
   /** Appelé par le moteur à chaque image en mode Jeu */
   renderPlay() {
     const rt = this.ed.runtime;
     if (!rt) return;
+    const [w, h] = this.viewSize();
     if (this.mode === 'game') rt.render();
     else {
       this.controls.update();
@@ -536,10 +542,10 @@ export class SceneView {
       }
       const cam = this.camera;
       rt.scene.background = rt.scene.userData.envBackground || null;
-      const [, h] = this.viewSize();
       rt.prepareRender(cam, h * this.renderer.getPixelRatio());
       this.renderer.render(rt.scene, cam);
     }
+    this.renderPip(rt.scene, w, h);
   }
 
   loop() {
@@ -550,6 +556,150 @@ export class SceneView {
       this.needsRender = false;
       this.renderEditor();
     }
+  }
+
+  // ------------------------------------------------------------ aperçu caméra (vue Scène)
+  buildPip() {
+    const btn = (label, title, fn, cls = '') =>
+      h('button.pip-btn' + cls, {
+        type: 'button',
+        title,
+        onclick: (e) => {
+          e.stopPropagation();
+          fn();
+        },
+      }, label);
+    this.pipLabel = h('span.pip-label');
+    this.pipBigBtn = btn(this.pip.big ? '⤡' : '⤢', 'Agrandir / réduire', () => this.setPipBig(!this.pip.big));
+    this.pipEl = h(
+      'div.cam-pip.hidden',
+      h('div.pip-bar', this.pipLabel, btn('📍', 'Placer la caméra comme la vue', () => this.alignCameraToView(), '.pip-align'), this.pipBigBtn, btn('✕', 'Masquer l’aperçu', () => this.setPip(false))),
+      h('div.pip-hit', { title: 'Ouvrir la vue Jeu', onclick: () => this.ed.setViewMode('game') }),
+      h('button.pip-open', { type: 'button', title: 'Afficher l’aperçu de la caméra', onclick: () => this.setPip(true) }, '🎥')
+    );
+    this.host.appendChild(this.pipEl);
+  }
+
+  setPip(on) {
+    this.pip.on = on;
+    Prefs.set('camPreview', on);
+    this.requestRender();
+  }
+
+  setPipBig(big) {
+    this.pip.big = big;
+    Prefs.set('camPreviewBig', big);
+    this.pipBigBtn.textContent = big ? '⤡' : '⤢';
+    this.requestRender();
+  }
+
+  /** Caméra montrée dans l'aperçu : celle sélectionnée, sinon la caméra principale */
+  pipTarget() {
+    if (this.ed.playing) {
+      const c = this.ed.runtime && this.ed.runtime.mainCamera();
+      return c && c._cam ? { cam: c._cam, comp: c._data, name: c.gameObject.name } : null;
+    }
+    const go = this.ed.selection && this.ed.getGO(this.ed.selection);
+    const comp = go && go.c.find((c) => c.type === 'Camera');
+    const e = comp && this.goMap.get(go.id);
+    const cam = e && e.group.userData.refs && e.group.userData.refs.camera;
+    if (cam) return { cam, comp, name: go.name, goId: go.id };
+    const gc = this.gameCamera();
+    return gc ? { cam: gc.cam, comp: gc.comp, name: gc.go.name, goId: gc.go.id } : null;
+  }
+
+  /** Rectangle de l'aperçu en px CSS (y compté depuis le bas, comme WebGL) */
+  pipRect(w, h) {
+    const aspect = w / h;
+    let pw = this.pip.big ? w * 0.62 : Math.min(300, Math.max(150, w * 0.42));
+    let ph = pw / aspect;
+    const maxH = (h - 40) * (this.pip.big ? 0.75 : 0.5);
+    if (ph > maxH) {
+      ph = maxH;
+      pw = ph * aspect;
+    }
+    pw = Math.round(pw);
+    ph = Math.round(ph);
+    return { x: w - pw - 8, y: 8, w: pw, h: ph };
+  }
+
+  renderPip(scene, w, h) {
+    // ✕ réduit l'aperçu en une pastille 🎥 ; sans caméra dans la scène, rien n'est affiché
+    const t = this.mode === 'scene' ? this.pipTarget() : null;
+    const show = !!t && this.pip.on;
+    const r = this.pipRect(w, h);
+    const key = t ? [this.pip.on, t.name, r.w, r.h].join('|') : '';
+    if (key !== this.pip.key) {
+      this.pip.key = key;
+      this.pipEl.classList.toggle('hidden', !t);
+      this.pipEl.classList.toggle('mini', !!t && !this.pip.on);
+      this.pipLabel.textContent = t ? '🎥 ' + t.name : '';
+      this.pipEl.style.width = show ? r.w + 'px' : '';
+      this.pipEl.style.height = show ? r.h + 'px' : '';
+    }
+    if (!show || r.h < 20) return;
+    const R = this.renderer;
+    const { cam, comp } = t;
+    fitCamera(cam, w / h);
+    const bg = scene.background;
+    if (comp.clear === 'color') scene.background = (this._pipBg = this._pipBg || new THREE.Color()).set(comp.bg);
+    else scene.background = scene.userData.envBackground || null;
+    const hv = this.helpers.visible;
+    const gv = this.gizmoHelper.visible;
+    const pg = this.playGrid && this.playGrid.visible;
+    this.helpers.visible = false;
+    this.gizmoHelper.visible = false;
+    if (this.playGrid) this.playGrid.visible = false;
+    // l'ombre du soleil ne dépend pas de la caméra : on réutilise celle de la vue Scène
+    const au = R.shadowMap.autoUpdate;
+    R.shadowMap.autoUpdate = false;
+    R.setScissorTest(true);
+    R.setScissor(r.x, r.y, r.w, r.h);
+    R.setViewport(r.x, r.y, r.w, r.h);
+    R.render(scene, cam);
+    R.setScissorTest(false);
+    R.setViewport(0, 0, w, h);
+    R.shadowMap.autoUpdate = au;
+    this.helpers.visible = hv;
+    this.gizmoHelper.visible = gv;
+    if (this.playGrid) this.playGrid.visible = pg;
+    scene.background = bg;
+  }
+
+  /** Place la caméra (sélectionnée ou principale) pour qu'elle voie comme la vue Scène */
+  alignCameraToView(goId) {
+    if (this.ed.playing) return toast('Arrête le jeu pour modifier la scène', 'warn');
+    const t = goId ? { goId } : this.pipTarget();
+    const go = t && t.goId && this.ed.getGO(t.goId);
+    const e = go && this.goMap.get(go.id);
+    const comp = go && go.c.find((c) => c.type === 'Camera');
+    if (!e || !comp) return toast('Aucune caméra dans la scène', 'warn');
+    const g = e.group;
+    const parent = g.parent || this.scene;
+    parent.updateWorldMatrix(true, false);
+    if (this.is2D) {
+      const wp = g.getWorldPosition(new THREE.Vector3());
+      wp.x = this.orbit2.target.x;
+      wp.y = this.orbit2.target.y;
+      g.position.copy(parent.worldToLocal(wp));
+      if (comp.ortho) comp.orthoSize = Math.round((6 / this.ortho.zoom) * 100) / 100;
+    } else {
+      // termine l'inertie de la vue pour viser sa position finale
+      this.orbit.enableDamping = false;
+      this.orbit.update();
+      this.orbit.enableDamping = true;
+      this.persp.updateMatrixWorld();
+      const m = new THREE.Matrix4().copy(parent.matrixWorld).invert().multiply(this.persp.matrixWorld);
+      const s = g.scale.clone();
+      m.decompose(g.position, g.quaternion, new THREE.Vector3());
+      g.scale.copy(s);
+    }
+    go.t = readTransform(g);
+    this.ed.updateGO(go);
+    this.ed.onTransformLive(go);
+    this.ed.commit('Aligner la caméra');
+    const moved = go.c.some((c) => c.type === 'Script');
+    toast(moved ? '📍 Caméra placée (son script peut la déplacer en jeu)' : '📍 La caméra voit maintenant comme la vue', 'ok', 2400);
   }
 
   // ------------------------------------------------------------ aperçu UI (vue Jeu)

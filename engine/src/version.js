@@ -3,6 +3,14 @@
 
 export const CHANGELOG = [
   {
+    version: '1.2.1',
+    notes: [
+      'Aperçu caméra : dans la vue Scène, une petite fenêtre montre en direct ce que voit la caméra (même pendant le jeu)',
+      '⤢ agrandit l’aperçu, ✕ le réduit en une pastille 🎥, et toucher l’aperçu ouvre la vue Jeu',
+      'Bouton 📍 : place la caméra pour qu’elle voie exactement comme la vue Scène',
+    ],
+  },
+  {
     version: '1.2.0',
     notes: [
       'Bibliothèque de scripts : plus de 30 scripts prêts (perso qui marche, caméras, ennemis, pièces, vie, plateformes…)',
